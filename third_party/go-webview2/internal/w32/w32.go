@@ -36,6 +36,7 @@ var (
 	User32PostMessageW       = user32.NewProc("PostMessageW")
 	User32SetWindowTextW     = user32.NewProc("SetWindowTextW")
 	User32PostThreadMessageW = user32.NewProc("PostThreadMessageW")
+	User32GetWindowRect      = user32.NewProc("GetWindowRect")
 	User32GetWindowLongW     = user32.NewProc("GetWindowLongW")
 	User32GetWindowLongPtrW  = user32.NewProc("GetWindowLongPtrW")
 	User32SetWindowLongW     = user32.NewProc("SetWindowLongW")
@@ -82,6 +83,7 @@ const (
 	SWPNoActivate   = 0x0010
 	SWPNoMove       = 0x0002
 	SWPFrameChanged = 0x0020
+	SWPNoSize       = 0x0001
 )
 
 const (
@@ -205,4 +207,11 @@ func SHCreateMemStream(data []byte) (uintptr, error) {
 	}
 
 	return ret, nil
+}
+
+// GetWindowRect retrieves the bounding rectangle of the window in screen
+// coordinates.
+func GetWindowRect(hwnd uintptr, rect *Rect) bool {
+	ret, _, _ := User32GetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(rect)))
+	return ret != 0
 }

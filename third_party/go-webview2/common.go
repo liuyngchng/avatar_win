@@ -53,6 +53,14 @@ type WebView interface {
 	// SetSize updates native window size. See Hint constants.
 	SetSize(w int, h int, hint Hint)
 
+	// SetPos moves the native window to the given screen coordinates.
+	SetPos(x int, y int)
+
+	// MoveBy moves the native window by the given delta (dx, dy) relative
+	// to its current position. Useful for implementing drag on borderless
+	// windows.
+	MoveBy(dx int, dy int)
+
 	// Navigate navigates webview to the given URL. URL may be a data URI, i.e.
 	// "data:text/text,<html>...</html>". It is often ok not to url-encode it
 	// properly, webview will re-encode it for you.

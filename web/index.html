@@ -483,8 +483,51 @@
     }
 
     // ─── User Interaction ───────────────────────────────────
-    document.addEventListener('click', () => {
-      sendEvent('tap', {});
+    // The window is borderless (WS_POPUP), so Windows provides no drag
+    // handle. We implement dragging manually: press-and-move drags the
+    // window (via goBridge_moveWindow), a press without movement counts
+    // as a tap (starts the conversation).
+    let dragState = null; // { startX, startY, lastX, lastY, moved }
+
+    document.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return; // left button only
+      dragState = {
+        startX: e.screenX,
+        startY: e.screenY,
+        lastX: e.screenX,
+        lastY: e.screenY,
+        moved: false,
+      };
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!dragState) return;
+      const dx = e.screenX - dragState.lastX;
+      const dy = e.screenY - dragState.lastY;
+
+      // Ignore tiny jitter; only start dragging past a threshold so a
+      // normal click still registers as a tap.
+      if (!dragState.moved &&
+          (Math.abs(e.screenX - dragState.startX) > 4 ||
+           Math.abs(e.screenY - dragState.startY) > 4)) {
+        dragState.moved = true;
+      }
+
+      if (dragState.moved && window.goBridge_moveWindow) {
+        window.goBridge_moveWindow(dx, dy);
+      }
+
+      dragState.lastX = e.screenX;
+      dragState.lastY = e.screenY;
+    });
+
+    document.addEventListener('mouseup', (e) => {
+      if (!dragState) return;
+      const wasDrag = dragState.moved;
+      dragState = null;
+      if (!wasDrag) {
+        sendEvent('tap', {});
+      }
     });
 
     document.addEventListener('keydown', (e) => {

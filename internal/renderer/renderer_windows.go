@@ -93,6 +93,13 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 			log.Printf("renderer: bind warning: %v", err)
 		}
 
+		// Bind goBridge_moveWindow so JS can drag the borderless window.
+		if err := w.Bind("goBridge_moveWindow", func(dx, dy int) {
+			w.MoveBy(dx, dy)
+		}); err != nil {
+			log.Printf("renderer: bind moveWindow warning: %v", err)
+		}
+
 		w.Navigate(url)
 		ready <- nil
 

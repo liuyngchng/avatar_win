@@ -518,3 +518,27 @@ func (w *webview) Bind(name string, f interface{}) error {
 func (w *webview) SetDefaultBackgroundColor(r, g, b, a uint8) error {
 	return w.browser.SetDefaultBackgroundColor(r, g, b, a)
 }
+
+// SetPos moves the window to the given screen coordinates (x, y).
+func (w *webview) SetPos(x, y int) {
+	_, _, _ = w32.User32SetWindowPos.Call(
+		w.hwnd, 0,
+		uintptr(x), uintptr(y),
+		0, 0,
+		w32.SWPNoZOrder|w32.SWPNoSize|w32.SWPNoActivate,
+	)
+}
+
+// MoveBy moves the window by the given delta (dx, dy) relative to its
+// current position.
+func (w *webview) MoveBy(dx, dy int) {
+	var rect w32.Rect
+	w32.GetWindowRect(w.hwnd, &rect)
+	_, _, _ = w32.User32SetWindowPos.Call(
+		w.hwnd, 0,
+		uintptr(int(rect.Left)+dx),
+		uintptr(int(rect.Top)+dy),
+		0, 0,
+		w32.SWPNoZOrder|w32.SWPNoSize|w32.SWPNoActivate,
+	)
+}
