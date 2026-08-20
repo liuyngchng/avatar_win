@@ -150,11 +150,37 @@
       scene.add(vrm.scene);
       vrm.scene.position.set(0, -0.95, 0);
 
+      // Set arms to natural hanging pose (T-pose → arms down)
+      setArmPose();
+
       console.log('VRM loaded:', vrm.meta?.metaVersion);
       console.log('Expressions:', Object.keys(vrm.expressionManager?.expressionMap || {}));
       document.getElementById('loading').style.display = 'none';
       document.getElementById('tapHint').style.display = 'block';
       updateStatus();
+    }
+
+    // Rotate upper arms from T-pose (arms horizontal) to a natural hanging pose.
+    function setArmPose() {
+      if (!vrm?.humanoid) return;
+
+      const leftUpperArm = vrm.humanoid.getNormalizedBoneNode('leftUpperArm');
+      const rightUpperArm = vrm.humanoid.getNormalizedBoneNode('rightUpperArm');
+
+      // In the T-pose the arms extend horizontally along ±X (up = +Y, forward = +Z).
+      // A rotation around the Z axis swings the arm in the vertical (XY) plane:
+      //   left arm points +X → -90° about Z brings it down to -Y.
+      //   right arm points -X → +90° about Z brings it down to -Y.
+      // A small outward component is added so the arms don't clip into the hips.
+      const armDown = Math.PI / 2;      // 90° down from horizontal
+      const armOut = 0.06;              // slight outward tilt (~3.5°)
+
+      if (leftUpperArm) {
+        leftUpperArm.rotation.set(0, 0, -(armDown + armOut));
+      }
+      if (rightUpperArm) {
+        rightUpperArm.rotation.set(0, 0, armDown + armOut);
+      }
     }
 
     // ─── Try to load a local VRM model, fallback to a simple placeholder ──
