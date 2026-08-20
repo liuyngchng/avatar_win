@@ -1,0 +1,16 @@
+# Binaries
+*.exe
+
+# Runtime logs
+avatar.log
+
+# Config with secrets (keep cfg.yml.example as template)
+cfg.yml
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

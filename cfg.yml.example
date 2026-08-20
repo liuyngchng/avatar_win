@@ -1,0 +1,28 @@
+# Avatar PC — 数字人 API 配置
+# 将此文件放在 avatar.exe 同目录下，启动时自动读取。
+#
+# 接入阿里云百炼：
+#   ASR: 千问3-ASR-Flash (chat/completions 兼容模式)
+#   TTS: 千问3-TTS-Flash (multimodal-generation)
+#   LLM: 千问对话模型 (chat/completions)
+#   API Key: https://help.aliyun.com/zh/model-studio/get-api-key
+
+asr:
+  # 华北2（北京）: https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions
+  url: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
+  model: "qwen3-asr-flash"
+
+llm:
+  # 百炼兼容 OpenAI chat/completions，可复用同一个 URL 结构
+  url: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
+  model: "qwen-plus"
+
+tts:
+  # DashScope 原生接口（非 OpenAI 兼容），北京地域
+  url: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+  model: "qwen3-tts-flash"
+  # 音色: Cherry / Stella / Luna / Bella / Nick / Ethan / Liam / Owen / Lily / Emily / Bella / Leo
+  voice: "Cherry"
+
+# 百炼 API Key（从 https://bailian.console.aliyun.com 获取）
+api_key: ""
