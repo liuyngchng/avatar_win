@@ -26,6 +26,12 @@ import (
 //go:embed web
 var webAssets embed.FS
 
+// Build metadata, injected via -ldflags "-X main.version=...".
+var (
+	version   = "dev"
+	buildTime = "unknown"
+)
+
 func main() {
 	// Initialize file logging first so we can see what happens even
 	// when launched by double-click (no console).
