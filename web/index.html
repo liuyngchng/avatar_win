@@ -168,18 +168,21 @@
       const rightUpperArm = vrm.humanoid.getNormalizedBoneNode('rightUpperArm');
 
       // In the T-pose the arms extend horizontally along ±X (up = +Y, forward = +Z).
-      // A rotation around the Z axis swings the arm in the vertical (XY) plane:
+      // A rotation around the Z axis swings the arm in the vertical (XY) plane.
       //   left arm points +X → -90° about Z brings it down to -Y.
       //   right arm points -X → +90° about Z brings it down to -Y.
-      // A small outward component is added so the arms don't clip into the hips.
+      // To splay the arms OUTWARD (away from the body midline) so the hands
+      // aren't hidden behind the torso, subtract the outward angle from the
+      // "down" rotation: left -90°+out moves toward +X (its own side),
+      // right +90°-out moves toward -X (its own side).
       const armDown = Math.PI / 2;      // 90° down from horizontal
-      const armOut = 0.06;              // slight outward tilt (~3.5°)
+      const armOut = 0.22;              // outward splay (~12.6°)
 
       if (leftUpperArm) {
-        leftUpperArm.rotation.set(0, 0, -(armDown + armOut));
+        leftUpperArm.rotation.set(0, 0, -(armDown - armOut));
       }
       if (rightUpperArm) {
-        rightUpperArm.rotation.set(0, 0, armDown + armOut);
+        rightUpperArm.rotation.set(0, 0, armDown - armOut);
       }
     }
 
