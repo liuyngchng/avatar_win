@@ -7,7 +7,7 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
-    #canvas { display: block; }
+    #canvas { display: block; cursor: default; }
 
     /* Status overlay */
     .status {
@@ -91,6 +91,12 @@
 
     // Idle micro-movement
     let idleTime = 0;
+
+    // Avatar base transform (user-dragged) + drag state.
+    // Idle breathing/sway is layered on top of avatarBaseY, so dragging and
+    // idle animation don't fight each other.
+    const avatarBase = { x: 0, y: -0.95 };
+    let dragAvatar = null; // { plane, offset, prevX, prevY, avatarObj } while dragging the avatar
 
     // ─── Three.js Setup ─────────────────────────────────────
     const canvas = document.getElementById('canvas');
@@ -328,10 +334,11 @@
       if (!vrm?.scene) return;
 
       const t = idleTime;
-      // Subtle breathing
+      // Subtle breathing (layered on top of avatarBase.y)
       const breathe = Math.sin(t * 1.4) * 0.008;
-      vrm.scene.position.y = -0.95 + breathe;
+      vrm.scene.position.y = avatarBase.y + (dragAvatar ? 0 : breathe);
       // Subtle side-to-side sway
+      vrm.scene.position.x = avatarBase.x + (dragAvatar ? 0 : Math.sin(t * 0.7) * 0.015);
       vrm.scene.rotation.z = Math.sin(t * 0.7) * 0.015;
       vrm.scene.rotation.y = Math.sin(t * 0.5) * 0.02;
     }
@@ -395,7 +402,8 @@
       const { group } = window._placeholder;
       if (!group) return;
       const t = idleTime;
-      group.position.y = -0.95 + Math.sin(t * 1.4) * 0.005;
+      group.position.y = avatarBase.y + (dragAvatar ? 0 : Math.sin(t * 1.4) * 0.005);
+      group.position.x = avatarBase.x + (dragAvatar ? 0 : Math.sin(t * 0.7) * 0.01);
       group.rotation.z = Math.sin(t * 0.7) * 0.01;
     }
 
@@ -509,14 +517,110 @@
 
     // ─── User Interaction ───────────────────────────────────
     // The window is borderless (WS_POPUP), so Windows provides no drag
-    // handle. We implement dragging manually: press-and-move drags the
-    // window (via goBridge_moveWindow), a press without movement counts
-    // as a tap (starts the conversation).
-    let dragState = null; // { startX, startY, lastX, lastY, moved }
+    // handle. We implement dragging manually with two distinct gestures:
+    //
+    //   • Drag ON the avatar → moves the avatar in 3D space (clamped to the
+    //     visible screen, so it can't be dragged off the edges).
+    //   • Drag on the background → moves the window (via goBridge_moveWindow).
+    //
+    // A press without movement counts as a tap (starts the conversation).
+
+    const raycaster = new THREE.Raycaster();
+    const _ndc = new THREE.Vector2();
+
+    function eventNDC(e) {
+      _ndc.x = (e.clientX / window.innerWidth) * 2 - 1;
+      _ndc.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      return _ndc;
+    }
+
+    // Returns the object to drag if the pointer is over the avatar, else null.
+    function hitAvatar(e) {
+      const avatarObj = vrm ? vrm.scene : (window._placeholder ? window._placeholder.group : null);
+      if (!avatarObj) return null;
+
+      raycaster.setFromCamera(eventNDC(e), camera);
+      const hits = raycaster.intersectObject(avatarObj, true);
+      return hits.length > 0 ? avatarObj : null;
+    }
+
+    // Clamp the avatar's base (x, y) so it always stays fully inside the
+    // visible viewport. y is clamped so the feet stay above the bottom edge;
+    // the margin keeps a little headroom below and above.
+    function clampAvatarBase() {
+      const depth = camera.position.z;   // distance from camera to the avatar drag plane
+      const halfH = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * depth;
+      const halfW = halfH * camera.aspect;
+
+      const obj = vrm ? vrm.scene : (window._placeholder ? window._placeholder.group : null);
+      // Approximate the avatar's horizontal half-extent (arms) and vertical
+      // extent (head above, feet below). Placeholder is ~1.7 units tall,
+      // VRM is roughly similar.
+      const halfBodyW = 0.55;
+      const topExtent = 0.95;   // distance from origin (feet) to the top of the head
+      const bottomMargin = 0.1;  // small gap left under the feet
+
+      const minX = -halfW + halfBodyW;
+      const maxX = halfW - halfBodyW;
+      const minY = -halfH + bottomMargin;
+      const maxY = halfH - topExtent;
+
+      avatarBase.x = Math.min(Math.max(avatarBase.x, minX), maxX);
+      avatarBase.y = Math.min(Math.max(avatarBase.y, minY), maxY);
+    }
+
+    // Determine (once) the drag plane and the avatar's offset from the grab
+    // point, then on each move intersect the mouse ray with that plane.
+    function startAvatarDrag(e, avatarObj) {
+      const plane = new THREE.Plane();
+      plane.setFromNormalAndCoplanarPoint(
+        camera.getWorldDirection(new THREE.Vector3()),
+        avatarObj.position
+      );
+      raycaster.setFromCamera(eventNDC(e), camera);
+      const start = new THREE.Vector3();
+      raycaster.ray.intersectPlane(plane, start);
+      const offset = new THREE.Vector3().subVectors(avatarObj.position, start);
+
+      dragAvatar = {
+        plane,
+        offset,
+        prevX: e.clientX,
+        prevY: e.clientY,
+        avatarObj,
+      };
+    }
+
+    function moveAvatarDrag(e) {
+      raycaster.setFromCamera(eventNDC(e), camera);
+      const point = new THREE.Vector3();
+      if (!raycaster.ray.intersectPlane(dragAvatar.plane, point)) return;
+      point.add(dragAvatar.offset);
+      avatarBase.x = point.x;
+      avatarBase.y = point.y;
+      clampAvatarBase();
+    }
+
+    // Window-drag state (used only when the press landed on the background).
+    let dragWindow = null; // { startX, startY, lastX, lastY, moved }
 
     document.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return; // left button only
-      dragState = {
+
+      const avatarObj = hitAvatar(e);
+      if (avatarObj) {
+        dragAvatar = null;
+        startAvatarDrag(e, avatarObj);
+        // Re-apply the avatar's position immediately so the idle sway does not
+        // fight the drag while the pointer is held still.
+        avatarBase.x = avatarObj.position.x;
+        avatarBase.y = avatarObj.position.y;
+        canvas.style.cursor = 'grabbing';
+        e.preventDefault();
+        return;
+      }
+
+      dragWindow = {
         startX: e.screenX,
         startY: e.screenY,
         lastX: e.screenX,
@@ -526,30 +630,55 @@
     });
 
     document.addEventListener('mousemove', (e) => {
-      if (!dragState) return;
-      const dx = e.screenX - dragState.lastX;
-      const dy = e.screenY - dragState.lastY;
+      // Avatar drag.
+      if (dragAvatar) {
+        moveAvatarDrag(e);
+        if (vrm) {
+          vrm.scene.position.x = avatarBase.x;
+          vrm.scene.position.y = avatarBase.y;
+        } else if (window._placeholder) {
+          window._placeholder.group.position.x = avatarBase.x;
+          window._placeholder.group.position.y = avatarBase.y;
+        }
+        return;
+      }
+
+      // Window drag.
+      if (!dragWindow) {
+        // Hover cursor feedback: grab when over the avatar.
+        canvas.style.cursor = hitAvatar(e) ? 'grab' : 'default';
+        return;
+      }
+
+      const dx = e.screenX - dragWindow.lastX;
+      const dy = e.screenY - dragWindow.lastY;
 
       // Ignore tiny jitter; only start dragging past a threshold so a
       // normal click still registers as a tap.
-      if (!dragState.moved &&
-          (Math.abs(e.screenX - dragState.startX) > 4 ||
-           Math.abs(e.screenY - dragState.startY) > 4)) {
-        dragState.moved = true;
+      if (!dragWindow.moved &&
+          (Math.abs(e.screenX - dragWindow.startX) > 4 ||
+           Math.abs(e.screenY - dragWindow.startY) > 4)) {
+        dragWindow.moved = true;
       }
 
-      if (dragState.moved && window.goBridge_moveWindow) {
+      if (dragWindow.moved && window.goBridge_moveWindow) {
         window.goBridge_moveWindow(dx, dy);
       }
 
-      dragState.lastX = e.screenX;
-      dragState.lastY = e.screenY;
+      dragWindow.lastX = e.screenX;
+      dragWindow.lastY = e.screenY;
     });
 
     document.addEventListener('mouseup', (e) => {
-      if (!dragState) return;
-      const wasDrag = dragState.moved;
-      dragState = null;
+      if (dragAvatar) {
+        dragAvatar = null;
+        canvas.style.cursor = 'default';
+        return;
+      }
+
+      if (!dragWindow) return;
+      const wasDrag = dragWindow.moved;
+      dragWindow = null;
       if (!wasDrag) {
         sendEvent('tap', {});
       }
@@ -567,6 +696,15 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
+      clampAvatarBase();
+      // Re-apply the (possibly clamped) base position.
+      if (vrm) {
+        vrm.scene.position.x = avatarBase.x;
+        vrm.scene.position.y = avatarBase.y;
+      } else if (window._placeholder) {
+        window._placeholder.group.position.x = avatarBase.x;
+        window._placeholder.group.position.y = avatarBase.y;
+      }
     });
 
     // ─── Start ──────────────────────────────────────────────
