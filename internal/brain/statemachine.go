@@ -511,7 +511,7 @@ func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 
 	const (
 		speechThreshold = 0.01                 // RMS above this counts as speech
-		silenceDuration = 800 * time.Millisecond // silence to end the turn
+		silenceDuration = 1200 * time.Millisecond // silence to end the turn
 		maxDuration     = 30 * time.Second        // hard safety cap
 	)
 
