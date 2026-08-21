@@ -3,10 +3,11 @@
 package audio
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"sync"
-	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/go-ole/go-ole"
@@ -16,7 +17,6 @@ import (
 const (
 	recorderSampleRate     = 16000
 	recorderBufferDuration = wca.REFERENCE_TIME(30 * 10000) // 30ms in 100ns units
-	recorderPeriodicity    = wca.REFERENCE_TIME(10 * 10000) // 10ms
 )
 
 type windowsRecorder struct {
@@ -58,7 +58,7 @@ func (r *windowsRecorder) Stop() {
 func (r *windowsRecorder) captureLoop(samples chan<- []float32) error {
 	// Initialize COM for this goroutine.
 	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err != nil {
-		return err
+		return fmt.Errorf("CoInitializeEx: %w", err)
 	}
 	defer ole.CoUninitialize()
 
@@ -66,35 +66,34 @@ func (r *windowsRecorder) captureLoop(samples chan<- []float32) error {
 	var mmde *wca.IMMDeviceEnumerator
 	if err := wca.CoCreateInstance(wca.CLSID_MMDeviceEnumerator, 0, wca.CLSCTX_ALL,
 		wca.IID_IMMDeviceEnumerator, &mmde); err != nil {
-		// Fallback: try the non-COM version.
-		return err
+		return fmt.Errorf("CoCreateInstance(MMDeviceEnumerator): %w", err)
 	}
 	defer mmde.Release()
 
 	// Get default capture device.
 	var mmd *wca.IMMDevice
 	if err := mmde.GetDefaultAudioEndpoint(wca.ECapture, wca.EConsole, &mmd); err != nil {
-		return err
+		return fmt.Errorf("GetDefaultAudioEndpoint(capture): %w", err)
 	}
 	defer mmd.Release()
 
 	// Activate IAudioClient.
 	var ac *wca.IAudioClient
 	if err := mmd.Activate(wca.IID_IAudioClient, wca.CLSCTX_ALL, nil, &ac); err != nil {
-		return err
+		return fmt.Errorf("Activate(IAudioClient): %w", err)
 	}
 	defer ac.Release()
 
-	// Get the device's mix format to know its native sample rate.
+	// Get the device's mix format.
 	var mixFormat *wca.WAVEFORMATEX
 	if err := ac.GetMixFormat(&mixFormat); err != nil {
-		return err
+		return fmt.Errorf("GetMixFormat: %w", err)
 	}
 	defer ole.CoTaskMemFree(uintptr(unsafe.Pointer(mixFormat)))
-	nativeSampleRate := mixFormat.NSamplesPerSec
+	log.Printf("audio: capture device mix format: tag=%d, channels=%d, rate=%d, bits=%d",
+		mixFormat.WFormatTag, mixFormat.NChannels, mixFormat.NSamplesPerSec, mixFormat.WBitsPerSample)
 
 	// Request 16kHz mono PCM format.
-	// We let WASAPI auto-convert (AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM).
 	requestedFormat := &wca.WAVEFORMATEX{
 		WFormatTag:     wca.WAVE_FORMAT_PCM,
 		NChannels:      1,
@@ -105,47 +104,46 @@ func (r *windowsRecorder) captureLoop(samples chan<- []float32) error {
 		CbSize:         0,
 	}
 
-	streamFlags := uint32(wca.AUDCLNT_STREAMFLAGS_EVENTCALLBACK | wca.AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM)
+	// Use polling mode (no event callback) for maximum compatibility.
+	// Some devices/drivers don't support AUDCLNT_STREAMFLAGS_EVENTCALLBACK.
+	streamFlags := uint32(wca.AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM)
 
-	// Create event handle.
-	eventHandle := wca.CreateEventExA(0, 0, 0, wca.EVENT_MODIFY_STATE|wca.SYNCHRONIZE)
-	if eventHandle == 0 {
-		return syscall.GetLastError()
-	}
-	defer wca.CloseHandle(eventHandle)
-
-	if err := ac.SetEventHandle(eventHandle); err != nil {
-		return err
-	}
-
+	log.Printf("audio: initializing in polling mode (no event callback)...")
 	if err := ac.Initialize(wca.AUDCLNT_SHAREMODE_SHARED, streamFlags,
 		recorderBufferDuration, 0, requestedFormat, nil); err != nil {
-		return err
+		// Retry without AUTOCONVERTPCM — some devices/drivers reject it.
+		log.Printf("audio: Initialize with AUTOCONVERTPCM failed: %v; retrying without", err)
+		streamFlags = 0
+		if err := ac.Initialize(wca.AUDCLNT_SHAREMODE_SHARED, streamFlags,
+			recorderBufferDuration, 0, requestedFormat, nil); err != nil {
+			return fmt.Errorf("Initialize: %w", err)
+		}
 	}
 
 	// Get buffer size.
 	var bufferFrameSize uint32
 	if err := ac.GetBufferSize(&bufferFrameSize); err != nil {
-		return err
+		return fmt.Errorf("GetBufferSize: %w", err)
 	}
 
 	// Get capture client.
 	var acc *wca.IAudioCaptureClient
 	if err := ac.GetService(wca.IID_IAudioCaptureClient, &acc); err != nil {
-		return err
+		return fmt.Errorf("GetService(IAudioCaptureClient): %w", err)
 	}
 	defer acc.Release()
 
 	// Start recording.
 	if err := ac.Start(); err != nil {
-		return err
+		return fmt.Errorf("Start: %w", err)
 	}
 	defer ac.Stop()
 
-	log.Printf("audio: WASAPI recording started, native=%d Hz, requested=%d Hz, buffer=%d frames",
-		nativeSampleRate, recorderSampleRate, bufferFrameSize)
+	log.Printf("audio: WASAPI recording started (polling), native=%d Hz, requested=%d Hz, buffer=%d frames",
+		mixFormat.NSamplesPerSec, recorderSampleRate, bufferFrameSize)
 
-	// Capture loop: wait for event, then read all available packets.
+	// Capture loop: poll for audio packets every 10ms.
+	pollInterval := 10 * time.Millisecond
 	for {
 		select {
 		case <-r.stopCh:
@@ -154,19 +152,11 @@ func (r *windowsRecorder) captureLoop(samples chan<- []float32) error {
 		default:
 		}
 
-		// Wait for the next audio buffer with a short timeout so we can
-		// check the stop signal.
-		dword := wca.WaitForSingleObject(eventHandle, 100)
-		if dword != 0 {
-			// Timeout or error — check stop signal and retry.
-			continue
-		}
-
 		// Drain all available packets.
 		for {
 			var packetSize uint32
 			if err := acc.GetNextPacketSize(&packetSize); err != nil {
-				return err
+				return fmt.Errorf("GetNextPacketSize: %w", err)
 			}
 			if packetSize == 0 {
 				break
@@ -176,7 +166,7 @@ func (r *windowsRecorder) captureLoop(samples chan<- []float32) error {
 			var framesToRead uint32
 			var flags uint32
 			if err := acc.GetBuffer(&data, &framesToRead, &flags, nil, nil); err != nil {
-				return err
+				return fmt.Errorf("GetBuffer: %w", err)
 			}
 
 			if flags&wca.AUDCLNT_BUFFERFLAGS_SILENT == 0 && data != nil && framesToRead > 0 {
@@ -197,5 +187,8 @@ func (r *windowsRecorder) captureLoop(samples chan<- []float32) error {
 
 			acc.ReleaseBuffer(framesToRead)
 		}
+
+		// Small sleep to avoid busy-waiting.
+		time.Sleep(pollInterval)
 	}
 }
