@@ -541,14 +541,38 @@ func (w *webview) SetPos(x, y int) {
 }
 
 // MoveBy moves the window by the given delta (dx, dy) relative to its
-// current position.
+// current position. The window is clamped so it can never be moved off the
+// screen edges.
 func (w *webview) MoveBy(dx, dy int) {
 	var rect w32.Rect
 	w32.GetWindowRect(w.hwnd, &rect)
+	winW := rect.Right - rect.Left
+	winH := rect.Bottom - rect.Top
+
+	screenW, _, _ := w32.User32GetSystemMetrics.Call(w32.SM_CXSCREEN)
+	screenH, _, _ := w32.User32GetSystemMetrics.Call(w32.SM_CYSCREEN)
+
+	newX := rect.Left + int32(dx)
+	newY := rect.Top + int32(dy)
+
+	// Clamp so the window stays fully on screen.
+	if newX < 0 {
+		newX = 0
+	}
+	if newY < 0 {
+		newY = 0
+	}
+	if maxX := int32(screenW) - winW; newX > maxX {
+		newX = maxX
+	}
+	if maxY := int32(screenH) - winH; newY > maxY {
+		newY = maxY
+	}
+
 	_, _, _ = w32.User32SetWindowPos.Call(
 		w.hwnd, 0,
-		uintptr(int(rect.Left)+dx),
-		uintptr(int(rect.Top)+dy),
+		uintptr(newX),
+		uintptr(newY),
 		0, 0,
 		w32.SWPNoZOrder|w32.SWPNoSize|w32.SWPNoActivate,
 	)
