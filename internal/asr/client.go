@@ -1,14 +1,20 @@
 // Package asr provides automatic speech recognition via the Alibaba Cloud
 // DashScope Qwen-Audio-3.0-ASR-Flash-Streaming WebSocket API.
 //
-// Protocol: WebSocket "run-task" duplex streaming.
-//   - Connect to wss://.../api-ws/v1/inference
-//   - Send run-task JSON (model, format=pcm, sample_rate=16000)
-//   - Wait for task-started
-//   - Send binary audio chunks (PCM 16-bit, 16kHz, mono)
-//   - Receive result-generated events with sentence.text
-//   - Send finish-task when done
-//   - Wait for task-finished and close
+// Protocol: WebSocket "run-task" duplex streaming with persistent connection.
+// Multiple run-task / finish-task cycles are multiplexed over a single
+// WebSocket connection, avoiding the TLS+WS handshake on every request.
+//
+// Lifecycle:
+//   - Connect to wss://.../api-ws/v1/inference (once)
+//   - For each Transcribe call:
+//     - Send run-task JSON (model, format=pcm, sample_rate=16000)
+//     - Wait for task-started
+//     - Send binary audio chunks (PCM 16-bit, 16kHz, mono)
+//     - Receive result-generated events with sentence.text
+//     - Send finish-task when done
+//     - Wait for task-finished
+//   - On Close: close the WebSocket connection
 package asr
 
 import (
@@ -18,26 +24,27 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 // Client is a WebSocket client for the DashScope realtime ASR API.
+// The underlying WebSocket connection is kept alive across Transcribe calls.
 type Client struct {
 	wsURL      string
 	model      string
 	apiKey     string
 	format     string
 	sampleRate int
+
+	mu   sync.Mutex
+	conn *websocket.Conn
 }
 
 // NewClient creates a new DashScope realtime ASR client.
-// wsURL is the WebSocket URL (e.g. "wss://...maas.aliyuncs.com/api-ws/v1/inference").
-// model is the model name (e.g. "qwen-audio-3.0-asr-flash-streaming").
-// apiKey is the DashScope API key.
-// format is the audio format ("pcm").
-// sampleRate is the audio sample rate in Hz (16000).
+// The connection is established lazily on the first Transcribe call.
 func NewClient(wsURL, model, apiKey string, format string, sampleRate int) *Client {
 	return &Client{
 		wsURL:      wsURL,
@@ -48,25 +55,33 @@ func NewClient(wsURL, model, apiKey string, format string, sampleRate int) *Clie
 	}
 }
 
-// Close releases resources. WebSocket connections are ephemeral, so this is a no-op.
-func (c *Client) Close() {}
+// Close closes the WebSocket connection.
+func (c *Client) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closeLocked()
+}
+
+func (c *Client) closeLocked() {
+	if c.conn != nil {
+		c.conn.Close()
+		c.conn = nil
+	}
+}
 
 // Transcribe sends PCM float32 audio samples to the ASR API via WebSocket
-// and returns the transcribed text. samples are normalized in [-1, 1],
-// sampleRate is the audio sample rate in Hz.
+// and returns the transcribed text. The WebSocket connection is reused across
+// calls; only the first call pays the TLS+WS handshake cost.
 func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
-	// Connect WebSocket.
-	header := make(http.Header)
-	header.Set("Authorization", "Bearer "+c.apiKey)
+	t0 := time.Now()
 
-	conn, resp, err := websocket.DefaultDialer.Dial(c.wsURL, header)
-	if err != nil {
-		if resp != nil {
-			return "", fmt.Errorf("asr: websocket dial HTTP %d: %w", resp.StatusCode, err)
-		}
-		return "", fmt.Errorf("asr: websocket dial: %w", err)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Ensure we have a live connection.
+	if err := c.ensureConnectedLocked(); err != nil {
+		return "", err
 	}
-	defer conn.Close()
 
 	// Generate task ID.
 	taskID := generateID()
@@ -90,12 +105,19 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 			"input": map[string]interface{}{},
 		},
 	}
-	if err := conn.WriteJSON(runTask); err != nil {
-		return "", fmt.Errorf("asr: send run-task: %w", err)
+	if err := c.conn.WriteJSON(runTask); err != nil {
+		log.Printf("asr: write run-task failed, reconnecting: %v", err)
+		c.closeLocked()
+		if err2 := c.ensureConnectedLocked(); err2 != nil {
+			return "", err2
+		}
+		if err := c.conn.WriteJSON(runTask); err != nil {
+			return "", fmt.Errorf("asr: send run-task: %w", err)
+		}
 	}
 	log.Printf("asr: sent run-task (task=%s, model=%s)", taskID, c.model)
 
-	// Read messages: wait for task-started, then send audio, then collect results.
+	// Read loop: wait for task-started, then send audio, then collect results.
 	var finalText string
 	taskStarted := false
 	audioSent := false
@@ -106,7 +128,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 	go func() {
 		defer close(done)
 		for {
-			msgType, msg, err := conn.ReadMessage()
+			msgType, msg, err := c.conn.ReadMessage()
 			if err != nil {
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 					return
@@ -133,11 +155,10 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 			case "task-started":
 				log.Printf("asr: task-started")
 				taskStarted = true
-				// Send audio in a separate goroutine so we can keep reading.
 				if !audioSent {
 					audioSent = true
 					go func() {
-						if err := c.sendAudio(conn, samples, c.sampleRate); err != nil {
+						if err := c.sendAudio(c.conn, samples, sampleRate); err != nil {
 							log.Printf("asr: send audio: %v", err)
 						}
 						// Send finish-task.
@@ -151,7 +172,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 								"input": map[string]interface{}{},
 							},
 						}
-						if err := conn.WriteJSON(finishTask); err != nil {
+						if err := c.conn.WriteJSON(finishTask); err != nil {
 							log.Printf("asr: send finish-task: %v", err)
 						}
 						log.Printf("asr: sent finish-task")
@@ -166,7 +187,6 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 				sentenceEnd, _ := sentence["sentence_end"].(bool)
 				log.Printf("asr: result-generated text=%q sentence_end=%v", text, sentenceEnd)
 				if sentenceEnd {
-					// Accumulate final sentences.
 					if finalText != "" {
 						finalText += " "
 					}
@@ -192,21 +212,46 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 	<-done
 
 	if readErr != nil {
+		c.closeLocked() // connection is in an unknown state, reconnect next time
 		return "", readErr
 	}
 
 	if !taskStarted {
+		c.closeLocked()
 		return "", fmt.Errorf("asr: task never started")
 	}
 
 	log.Printf("asr: final text: %q", finalText)
+	log.Printf("⏱ [timing] ASR: total=%dms (no handshake, send_audio + recv_results)", time.Since(t0).Milliseconds())
 	return finalText, nil
+}
+
+// ensureConnectedLocked connects to the ASR API.
+// Must be called with c.mu held.
+func (c *Client) ensureConnectedLocked() error {
+	if c.conn != nil {
+		return nil
+	}
+
+	t0 := time.Now()
+	header := make(http.Header)
+	header.Set("Authorization", "Bearer "+c.apiKey)
+
+	conn, resp, err := websocket.DefaultDialer.Dial(c.wsURL, header)
+	if err != nil {
+		if resp != nil {
+			return fmt.Errorf("asr: websocket dial HTTP %d: %w", resp.StatusCode, err)
+		}
+		return fmt.Errorf("asr: websocket dial: %w", err)
+	}
+	c.conn = conn
+	log.Printf("⏱ [timing] ASR: ws_connect=%dms", time.Since(t0).Milliseconds())
+	return nil
 }
 
 // sendAudio converts float32 samples to int16 PCM and sends them as binary
 // WebSocket frames in chunks of ~100ms.
 func (c *Client) sendAudio(conn *websocket.Conn, samples []float32, sampleRate int) error {
-	// Convert float32 to int16 PCM bytes.
 	pcm := float32ToPCM(samples)
 
 	// Chunk size: 100ms = sampleRate * 2 bytes per sample / 10
@@ -224,11 +269,14 @@ func (c *Client) sendAudio(conn *websocket.Conn, samples []float32, sampleRate i
 		if err := conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
 			return fmt.Errorf("send binary audio: %w", err)
 		}
-		// Simulate real-time pacing: 100ms per chunk.
-		time.Sleep(100 * time.Millisecond)
+		// Audio is already fully recorded — send chunks back-to-back.
+		// No real-time pacing sleep here: that would needlessly replay the
+		// audio at 1x speed and add ~100ms of latency per 100ms of audio
+		// (several seconds per turn). The server accepts faster-than-realtime
+		// input and uses finish-task to delimit the end of the audio.
 	}
 
-	log.Printf("asr: sent %d bytes of PCM audio in %d-byte chunks", len(pcm), chunkSize)
+	log.Printf("asr: sent %d bytes of PCM audio in %d-byte chunks (fast-forward)", len(pcm), chunkSize)
 	return nil
 }
 
@@ -249,6 +297,5 @@ func float32ToPCM(samples []float32) []byte {
 
 // generateID creates a short random hex ID for task identification.
 func generateID() string {
-	// Use nanosecond timestamp as a simple unique ID.
 	return fmt.Sprintf("%016x", time.Now().UnixNano())
 }

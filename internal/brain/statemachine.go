@@ -150,6 +150,8 @@ func (sm *StateMachine) setState(mode Mode, emotion Emotion, responseText string
 // If a newer generation exists (the user tapped again), this pipeline
 // aborts early.
 func (sm *StateMachine) pipeline(gen int64) {
+	t0 := time.Now() // ⏱ pipeline start (user trigger)
+
 	// Clear the busy flag only when this pipeline is still the current one.
 	defer func() {
 		sm.mu.Lock()
@@ -174,7 +176,9 @@ func (sm *StateMachine) pipeline(gen int64) {
 	}
 
 	// 1. Record until silence (simple energy-based VAD).
+	tRecStart := time.Now() // ⏱ recording start
 	samples := sm.recordWithVAD(cancel)
+	tRecEnd := time.Now() // ⏱ recording end
 	if canceled() {
 		log.Printf("state: canceled after recording (gen=%d)", gen)
 		return
@@ -185,12 +189,15 @@ func (sm *StateMachine) pipeline(gen int64) {
 		sm.emit()
 		return
 	}
+	log.Printf("⏱ [timing] recording: %dms (total elapsed: %dms)", tRecEnd.Sub(tRecStart).Milliseconds(), tRecEnd.Sub(t0).Milliseconds())
 
 	// 2. ASR.
 	sm.setState(ModeThinking, EmotionNeutral, "")
 	sm.emit()
 
+	tASRStart := time.Now() // ⏱ ASR start
 	userText, err := sm.asrClient.Transcribe(samples, recorderSampleRate)
+	tASREnd := time.Now() // ⏱ ASR end
 	if canceled() {
 		log.Printf("state: canceled after ASR (gen=%d)", gen)
 		return
@@ -213,6 +220,7 @@ func (sm *StateMachine) pipeline(gen int64) {
 	sm.state.LastUserText = userText
 	sm.mu.Unlock()
 	log.Printf("state: user said %q (gen=%d)", userText, gen)
+	log.Printf("⏱ [timing] ASR: %dms (total elapsed: %dms)", tASREnd.Sub(tASRStart).Milliseconds(), tASREnd.Sub(t0).Milliseconds())
 
 	// Re-emit so the frontend shows the recognized text during thinking.
 	sm.emit()
@@ -223,7 +231,9 @@ func (sm *StateMachine) pipeline(gen int64) {
 	}
 
 	// 3. LLM.
+	tLLMStart := time.Now() // ⏱ LLM start
 	replyText, err := sm.llmClient.Chat(userText)
+	tLLMEnd := time.Now() // ⏱ LLM end
 	if canceled() {
 		log.Printf("state: canceled after LLM (gen=%d)", gen)
 		return
@@ -243,6 +253,7 @@ func (sm *StateMachine) pipeline(gen int64) {
 	}
 
 	sm.setState(ModeThinking, EmotionHappy, replyText)
+	log.Printf("⏱ [timing] LLM: %dms (total elapsed: %dms)", tLLMEnd.Sub(tLLMStart).Milliseconds(), tLLMEnd.Sub(t0).Milliseconds())
 
 	if canceled() {
 		log.Printf("state: canceled before TTS (gen=%d)", gen)
@@ -250,7 +261,9 @@ func (sm *StateMachine) pipeline(gen int64) {
 	}
 
 	// 4. TTS.
+	tTTSStart := time.Now() // ⏱ TTS start
 	result, err := sm.ttsClient.Synthesize(replyText, 1.0)
+	tTTSEnd := time.Now() // ⏱ TTS end
 	if canceled() {
 		log.Printf("state: canceled after TTS (gen=%d)", gen)
 		return
@@ -266,6 +279,7 @@ func (sm *StateMachine) pipeline(gen int64) {
 	audioDur := time.Duration(float64(len(result.Samples)) / float64(result.SampleRate) * float64(time.Second))
 	timeline := GenerateVisemeTimeline(replyText, audioDur)
 	log.Printf("state: viseme timeline: %d entries, total audio %.1fs (gen=%d)", len(timeline), audioDur.Seconds(), gen)
+	log.Printf("⏱ [timing] TTS: %dms (total elapsed: %dms)", tTTSEnd.Sub(tTTSStart).Milliseconds(), tTTSEnd.Sub(t0).Milliseconds())
 
 	// 6. Speak.
 	if sm.audioPlayer == nil {
@@ -284,6 +298,7 @@ func (sm *StateMachine) pipeline(gen int64) {
 	sm.mu.Unlock()
 	sm.emit()
 
+	tPlayStart := time.Now() // ⏱ playback start
 	player, err := sm.audioPlayer.Play(result.Samples)
 	if err != nil {
 		log.Printf("state: audio play error: %v", err)
@@ -298,6 +313,7 @@ func (sm *StateMachine) pipeline(gen int64) {
 	// Drive viseme timeline while audio plays. The loop also checks for
 	// cancellation so the user can interrupt the avatar mid-speech.
 	sm.speakWithCancel(player, timeline, cancel)
+	tPlayEnd := time.Now() // ⏱ playback end
 
 	// Reset viseme to rest.
 	select {
@@ -311,6 +327,17 @@ func (sm *StateMachine) pipeline(gen int64) {
 	sm.mu.Unlock()
 	sm.setState(ModeIdle, EmotionNeutral, "")
 	sm.emit()
+
+	// ⏱ Final timing summary for the entire pipeline.
+	log.Printf("⏱ [timing] playback: %dms | TOTAL pipeline: %dms (rec=%.1f%%, asr=%.1f%%, llm=%.1f%%, tts=%.1f%%, play=%.1f%%)",
+		tPlayEnd.Sub(tPlayStart).Milliseconds(),
+		tPlayEnd.Sub(t0).Milliseconds(),
+		float64(tRecEnd.Sub(tRecStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
+		float64(tASREnd.Sub(tASRStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
+		float64(tLLMEnd.Sub(tLLMStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
+		float64(tTTSEnd.Sub(tTTSStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
+		float64(tPlayEnd.Sub(tPlayStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
+	)
 }
 
 // speakWithCancel drives viseme timeline while audio plays. If the cancel

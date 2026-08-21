@@ -88,6 +88,8 @@ func (c *Client) Chat(userText string) (string, error) {
 
 // chat performs a non-streaming completion request.
 func (c *Client) chat(messages []chatMessage) (string, error) {
+	t0 := time.Now() // ⏱ LLM start
+
 	body := chatRequest{
 		Model:       c.model,
 		Messages:    messages,
@@ -134,5 +136,6 @@ func (c *Client) chat(messages []chatMessage) (string, error) {
 
 	reply := result.Choices[0].Message.Content
 	log.Printf("llm: reply %d chars", len([]rune(reply)))
+	log.Printf("⏱ [timing] LLM: total=%dms (api_call + decode)", time.Since(t0).Milliseconds())
 	return reply, nil
 }
