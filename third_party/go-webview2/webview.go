@@ -364,14 +364,14 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 	setWindowContext(w.hwnd, w)
 
 	// Remove the DWM decoration that Windows 11 draws around borderless
-	// windows: a 1px border line and rounded corners. Without this the
-	// transparent WebView2 shows through, but a thin gray frame remains
-	// around the window edge.
+	// windows: a 1px border line, rounded corners, and drop shadow.
+	// DWMWA_NCRENDERING_POLICY → DWMNCRP_DISABLED: disables DWM's non-client
+	// rendering entirely — no border, no shadow, no rounded corners.
+	// DWMWA_BORDER_COLOR → DWMWA_COLOR_NONE: explicitly tells DWM to draw
+	// no border line, in case the rendering policy alone doesn't cover it.
 	if opts.Borderless {
-		w32.DwmSetWindowAttributeInt(w.hwnd, w32.DWMWA_WINDOW_CORNER_PREFERENCE, w32.DWMWCP_DONOTROUND)
-		// DWMWA_BORDER_COLOR = 34. A fully transparent (alpha == 0) border
-		// color makes DWM draw no border line at all.
-		w32.DwmSetWindowAttributeInt(w.hwnd, 34, 0x00FFFFFF)
+		w32.DwmSetWindowAttributeInt(w.hwnd, w32.DWMWA_NCRENDERING_POLICY, w32.DWMNCRP_DISABLED)
+		w32.DwmSetWindowAttributeInt(w.hwnd, w32.DWMWA_BORDER_COLOR, w32.DWMWA_COLOR_NONE)
 	}
 
 	_, _, _ = w32.User32ShowWindow.Call(w.hwnd, w32.SWShow)

@@ -144,12 +144,33 @@ const (
 )
 
 // DWM window attributes. Used to control the desktop window manager's
-// per-window decoration (rounded corners / border) for borderless windows.
+// per-window decoration (rounded corners / border / shadow) for borderless
+// windows.
 const (
+	DWMWA_NCRENDERING_POLICY       = 2
 	DWMWA_WINDOW_CORNER_PREFERENCE = 33
-	DWMWCP_DONOTROUND              = 1
-	DWMWCP_ROUND                   = 2
-	DWMWCP_ROUNDSMALL              = 3
+	DWMWA_BORDER_COLOR             = 34
+)
+
+// DWMWA_NCRENDERING_POLICY values.
+const (
+	DWMNCRP_USEWINDOWSTYLE = 0
+	DWMNCRP_DISABLED       = 1
+	DWMNCRP_ENABLED        = 2
+)
+
+// DWMWA_WINDOW_CORNER_PREFERENCE values.
+const (
+	DWMWCP_DONOTROUND = 1
+	DWMWCP_ROUND      = 2
+	DWMWCP_ROUNDSMALL = 3
+)
+
+// DWMWA_BORDER_COLOR special values (COLORREF 0x00BBGGRR, but DWM interprets
+// these two sentinel values specially).
+const (
+	DWMWA_COLOR_DEFAULT = 0xFFFFFFFF
+	DWMWA_COLOR_NONE    = 0xFFFFFFFE
 )
 
 type WndClassExW struct {
