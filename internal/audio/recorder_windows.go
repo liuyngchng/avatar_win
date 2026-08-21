@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"runtime"
 	"sync"
 	"time"
 	"unsafe"
@@ -34,14 +35,20 @@ func (r *windowsRecorder) Start() (<-chan []float32, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Create a per-session stop channel.  The goroutine below captures
+	// its own stopCh so that if a stale caller calls Stop() after a new
+	// Start() has replaced r.stopCh, the new session is unaffected.
 	r.stopCh = make(chan struct{})
 	r.stopOnce = sync.Once{}
+	stopCh := r.stopCh
 
 	samples := make(chan []float32, 32)
 
 	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
 		defer close(samples)
-		if err := r.captureLoop(samples); err != nil {
+		if err := r.captureLoop(samples, stopCh); err != nil {
 			log.Printf("audio: recorder error: %v", err)
 		}
 	}()
@@ -55,10 +62,16 @@ func (r *windowsRecorder) Stop() {
 	})
 }
 
-func (r *windowsRecorder) captureLoop(samples chan<- []float32) error {
+func (r *windowsRecorder) captureLoop(samples chan<- []float32, stopCh <-chan struct{}) error {
 	// Initialize COM for this goroutine.
+	// Try MULTITHREADED first; fall back to APARTMENTTHREADED if the OS
+	// thread was already initialised with a different mode.
 	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err != nil {
-		return fmt.Errorf("CoInitializeEx: %w", err)
+		// RPC_E_CHANGED_MODE — thread already initialised in a different mode.
+		// Try apartment-threaded instead.
+		if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
+			return fmt.Errorf("CoInitializeEx: %w", err)
+		}
 	}
 	defer ole.CoUninitialize()
 
@@ -146,7 +159,7 @@ func (r *windowsRecorder) captureLoop(samples chan<- []float32) error {
 	pollInterval := 10 * time.Millisecond
 	for {
 		select {
-		case <-r.stopCh:
+		case <-stopCh:
 			log.Printf("audio: recording stopped")
 			return nil
 		default:
@@ -179,7 +192,7 @@ func (r *windowsRecorder) captureLoop(samples chan<- []float32) error {
 
 				select {
 				case samples <- floatSamples:
-				case <-r.stopCh:
+				case <-stopCh:
 					acc.ReleaseBuffer(framesToRead)
 					return nil
 				}

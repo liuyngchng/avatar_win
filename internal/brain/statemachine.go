@@ -10,6 +10,8 @@ import (
 	"github.com/liuyngchng/avatar-pc/internal/audio"
 	"github.com/liuyngchng/avatar-pc/internal/llm"
 	"github.com/liuyngchng/avatar-pc/internal/tts"
+
+	"github.com/ebitengine/oto/v3"
 )
 
 const recorderSampleRate = 16000
@@ -22,6 +24,9 @@ type Event struct {
 
 // StateMachine orchestrates the digital human's behavior:
 // tap → record (VAD) → ASR → LLM → TTS → play + viseme → idle.
+//
+// Tapping while the avatar is speaking interrupts the current turn and
+// starts a new one immediately.
 type StateMachine struct {
 	state        State
 	stateChanges chan State
@@ -33,8 +38,10 @@ type StateMachine struct {
 	audioPlayer  *audio.Player
 	recorder     audio.Recorder
 
-	mu   sync.Mutex
-	busy bool
+	mu         sync.Mutex
+	busy       bool
+	generation int64        // incremented on each tap; used to detect stale pipelines
+	cancel     chan struct{} // closed when the current pipeline should abort
 }
 
 // NewStateMachine creates a state machine in ModeIdle.
@@ -58,6 +65,7 @@ func NewStateMachine(
 		llmClient:    llmClient,
 		audioPlayer:  audioPlayer,
 		recorder:     recorder,
+		cancel:       make(chan struct{}),
 	}
 }
 
@@ -100,19 +108,27 @@ func (sm *StateMachine) handleEvent(ev Event) {
 	switch ev.Type {
 	case "tap", "wake_detected":
 		sm.mu.Lock()
+
+		// Increment generation so any running pipeline knows it's stale.
+		sm.generation++
+		gen := sm.generation
+
 		if sm.busy {
-			sm.mu.Unlock()
-			log.Printf("state: event=%s ignored (busy)", ev.Type)
-			return
+			// Interrupt the current pipeline.
+			close(sm.cancel)
+			sm.cancel = make(chan struct{})
+			log.Printf("state: event=%s → interrupting current turn (gen=%d → %d)", ev.Type, gen-1, gen)
+		} else {
+			log.Printf("state: event=%s → listening (gen=%d)", ev.Type, gen)
 		}
+
 		sm.busy = true
 		sm.mu.Unlock()
 
-		log.Printf("state: event=%s → listening", ev.Type)
 		sm.setState(ModeListening, EmotionNeutral, "")
 		sm.emit()
 
-		go sm.pipeline()
+		go sm.pipeline(gen)
 	}
 }
 
@@ -129,24 +145,42 @@ func (sm *StateMachine) setState(mode Mode, emotion Emotion, responseText string
 
 // pipeline runs a full conversation turn:
 // record → ASR → LLM → TTS → play + viseme → idle.
-func (sm *StateMachine) pipeline() {
-	// Clear the busy flag when this turn completes.
+//
+// gen is the generation number at the time this pipeline was created.
+// If a newer generation exists (the user tapped again), this pipeline
+// aborts early.
+func (sm *StateMachine) pipeline(gen int64) {
+	// Clear the busy flag only when this pipeline is still the current one.
 	defer func() {
 		sm.mu.Lock()
-		sm.busy = false
+		if sm.generation == gen {
+			sm.busy = false
+		}
 		sm.mu.Unlock()
 	}()
 
+	// Snapshot the cancel channel for this generation.
+	sm.mu.Lock()
+	cancel := sm.cancel
+	sm.mu.Unlock()
+
+	canceled := func() bool {
+		select {
+		case <-cancel:
+			return true
+		default:
+			return false
+		}
+	}
+
 	// 1. Record until silence (simple energy-based VAD).
-	samples, err := sm.recordWithVAD()
-	if err != nil {
-		log.Printf("state: recording failed: %v", err)
-		sm.setState(ModeIdle, EmotionNeutral, "")
-		sm.emit()
+	samples := sm.recordWithVAD(cancel)
+	if canceled() {
+		log.Printf("state: canceled after recording (gen=%d)", gen)
 		return
 	}
 	if len(samples) == 0 {
-		log.Printf("state: no speech detected")
+		log.Printf("state: no speech detected (gen=%d)", gen)
 		sm.setState(ModeIdle, EmotionNeutral, "")
 		sm.emit()
 		return
@@ -157,6 +191,10 @@ func (sm *StateMachine) pipeline() {
 	sm.emit()
 
 	userText, err := sm.asrClient.Transcribe(samples, recorderSampleRate)
+	if canceled() {
+		log.Printf("state: canceled after ASR (gen=%d)", gen)
+		return
+	}
 	if err != nil {
 		log.Printf("state: ASR failed: %v", err)
 		sm.setState(ModeIdle, EmotionNeutral, "")
@@ -174,10 +212,22 @@ func (sm *StateMachine) pipeline() {
 	sm.mu.Lock()
 	sm.state.LastUserText = userText
 	sm.mu.Unlock()
-	log.Printf("state: user said %q", userText)
+	log.Printf("state: user said %q (gen=%d)", userText, gen)
+
+	// Re-emit so the frontend shows the recognized text during thinking.
+	sm.emit()
+
+	if canceled() {
+		log.Printf("state: canceled before LLM (gen=%d)", gen)
+		return
+	}
 
 	// 3. LLM.
 	replyText, err := sm.llmClient.Chat(userText)
+	if canceled() {
+		log.Printf("state: canceled after LLM (gen=%d)", gen)
+		return
+	}
 	if err != nil {
 		log.Printf("state: LLM failed: %v", err)
 		sm.setState(ModeIdle, EmotionNeutral, "")
@@ -194,8 +244,17 @@ func (sm *StateMachine) pipeline() {
 
 	sm.setState(ModeThinking, EmotionHappy, replyText)
 
+	if canceled() {
+		log.Printf("state: canceled before TTS (gen=%d)", gen)
+		return
+	}
+
 	// 4. TTS.
 	result, err := sm.ttsClient.Synthesize(replyText, 1.0)
+	if canceled() {
+		log.Printf("state: canceled after TTS (gen=%d)", gen)
+		return
+	}
 	if err != nil {
 		log.Printf("state: TTS failed: %v", err)
 		sm.setState(ModeIdle, EmotionNeutral, "")
@@ -206,7 +265,7 @@ func (sm *StateMachine) pipeline() {
 	// 5. Generate viseme timeline.
 	audioDur := time.Duration(float64(len(result.Samples)) / float64(result.SampleRate) * float64(time.Second))
 	timeline := GenerateVisemeTimeline(replyText, audioDur)
-	log.Printf("state: viseme timeline: %d entries, total audio %.1fs", len(timeline), audioDur.Seconds())
+	log.Printf("state: viseme timeline: %d entries, total audio %.1fs (gen=%d)", len(timeline), audioDur.Seconds(), gen)
 
 	// 6. Speak.
 	if sm.audioPlayer == nil {
@@ -236,13 +295,43 @@ func (sm *StateMachine) pipeline() {
 		return
 	}
 
-	// Drive viseme timeline while audio plays.
+	// Drive viseme timeline while audio plays. The loop also checks for
+	// cancellation so the user can interrupt the avatar mid-speech.
+	sm.speakWithCancel(player, timeline, cancel)
+
+	// Reset viseme to rest.
+	select {
+	case sm.visemes <- VisemeEvent{Type: "viseme", Viseme: VisemeRest, Weight: 0}:
+	default:
+	}
+
+	// 7. Back to idle.
+	sm.mu.Lock()
+	sm.state.IsSpeaking = false
+	sm.mu.Unlock()
+	sm.setState(ModeIdle, EmotionNeutral, "")
+	sm.emit()
+}
+
+// speakWithCancel drives viseme timeline while audio plays. If the cancel
+// channel is closed, the audio is stopped immediately.
+func (sm *StateMachine) speakWithCancel(player *oto.Player, timeline []VisemeTimelineEntry, cancel <-chan struct{}) {
 	startTime := time.Now()
 	timelineIdx := 0
+
 	for player.IsPlaying() {
+		// Check for cancellation.
+		select {
+		case <-cancel:
+			log.Printf("state: playback interrupted by user")
+			player.Pause()
+			return
+		default:
+		}
+
 		if err := player.Err(); err != nil {
 			log.Printf("state: audio play error: %v", err)
-			break
+			return
 		}
 
 		elapsed := time.Since(startTime).Milliseconds()
@@ -263,33 +352,24 @@ func (sm *StateMachine) pipeline() {
 
 		time.Sleep(10 * time.Millisecond)
 	}
-
-	// Reset viseme to rest.
-	select {
-	case sm.visemes <- VisemeEvent{Type: "viseme", Viseme: VisemeRest, Weight: 0}:
-	default:
-	}
-
-	// 7. Back to idle.
-	sm.mu.Lock()
-	sm.state.IsSpeaking = false
-	sm.mu.Unlock()
-	sm.setState(ModeIdle, EmotionNeutral, "")
-	sm.emit()
 }
 
 // recordWithVAD records audio until the user stops speaking, using a
 // simple energy-based voice activity detection: it waits for speech to
 // start, then stops after a configurable duration of silence.
-func (sm *StateMachine) recordWithVAD() ([]float32, error) {
+//
+// If the cancel channel is closed, recording stops immediately.
+func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 	chunks, err := sm.recorder.Start()
 	if err != nil {
-		return nil, err
+		log.Printf("state: recording failed: %v", err)
+		return nil
 	}
-	defer sm.recorder.Stop()
+	// Never defer Stop() here — if we're cancelled, the next pipeline's
+	// Start() call already owns the recorder and our Stop() would kill it.
 
 	const (
-		speechThreshold = 0.01                // RMS above this counts as speech
+		speechThreshold = 0.01                 // RMS above this counts as speech
 		silenceDuration = 1500 * time.Millisecond // silence to end the turn
 		maxDuration     = 30 * time.Second        // hard safety cap
 	)
@@ -299,38 +379,45 @@ func (sm *StateMachine) recordWithVAD() ([]float32, error) {
 	lastSpeech := time.Now()
 	start := time.Now()
 
-	for chunk := range chunks {
-		// Accumulate.
-		all = append(all, chunk...)
-
-		rms := rmsOf(chunk)
-		if rms > speechThreshold {
-			if !speaking {
-				log.Printf("state: speech started (rms=%.4f)", rms)
-				speaking = true
+	for {
+		select {
+		case <-cancel:
+			log.Printf("state: recording canceled")
+			return all
+		case chunk, ok := <-chunks:
+			if !ok {
+				// Channel closed — recorder stopped.
+				if !speaking {
+					return nil
+				}
+				return all
 			}
-			lastSpeech = time.Now()
-		}
 
-		// Stop when speech started and silence persisted long enough.
-		if speaking && time.Since(lastSpeech) >= silenceDuration {
-			log.Printf("state: silence detected, stopping recording")
-			break
-		}
+			// Accumulate.
+			all = append(all, chunk...)
 
-		// Hard safety cap.
-		if time.Since(start) >= maxDuration {
-			log.Printf("state: max recording duration reached")
-			break
+			rms := rmsOf(chunk)
+			if rms > speechThreshold {
+				if !speaking {
+					log.Printf("state: speech started (rms=%.4f)", rms)
+					speaking = true
+				}
+				lastSpeech = time.Now()
+			}
+
+			// Stop when speech started and silence persisted long enough.
+			if speaking && time.Since(lastSpeech) >= silenceDuration {
+				log.Printf("state: silence detected, stopping recording")
+				return all
+			}
+
+			// Hard safety cap.
+			if time.Since(start) >= maxDuration {
+				log.Printf("state: max recording duration reached")
+				return all
+			}
 		}
 	}
-
-	// Trim leading silence (everything before speech began is noise).
-	if !speaking {
-		return nil, nil
-	}
-
-	return all, nil
 }
 
 // rmsOf computes the root-mean-square of a float32 sample chunk.

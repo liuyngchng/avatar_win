@@ -29,6 +29,7 @@ type ASRConfig struct {
 type LLMConfig struct {
 	URL   string `yaml:"url"`
 	Model string `yaml:"model"`
+	Name  string `yaml:"name"`
 }
 
 // TTSConfig holds the text-to-speech configuration.

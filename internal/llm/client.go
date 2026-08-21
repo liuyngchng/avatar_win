@@ -25,12 +25,16 @@ type Client struct {
 // (e.g. "https://llm.example.com/v1/chat/completions").
 // model is the model name to request.
 // apiKey is the Bearer token for authentication.
-func NewClient(baseURL, model, apiKey string) *Client {
+// name is the assistant's display name, injected into the system prompt.
+func NewClient(baseURL, model, apiKey, name string) *Client {
+	if name == "" {
+		name = "小然"
+	}
 	return &Client{
 		baseURL: baseURL,
 		model:   model,
 		apiKey:  apiKey,
-		system: "你是一个语音助手，名字叫「小火」。用口语化的中文回复，自然友好、直接明了。" +
+		system: "你是一个语音助手，名字叫「" + name + "」。用口语化的中文回复，自然友好、直接明了。" +
 			"闲聊或简单问题控制在1-3句话（80字以内）；" +
 			"知识类问题可以适当展开解释，但保持简洁，不超过150字。" +
 			"围绕用户的问题回答，不要偏离话题。" +

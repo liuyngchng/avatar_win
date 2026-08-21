@@ -18,6 +18,8 @@ llm:
   # 百炼兼容 OpenAI chat/completions，可复用同一个 URL 结构
   url: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
   model: "qwen-plus"
+  # 人偶的名字（会写入系统提示词，可自行修改）
+  name: "小然"
 
 tts:
   # Qwen-TTS Realtime WebSocket API，北京地域

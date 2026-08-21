@@ -70,7 +70,7 @@ func main() {
 	asrClient := asr.NewClient(cfg.ASR.URL, cfg.ASR.Model, cfg.APIKey, cfg.ASR.Format, cfg.ASR.SampleRate)
 	defer asrClient.Close()
 
-	llmClient := llm.NewClient(cfg.LLM.URL, cfg.LLM.Model, cfg.APIKey)
+	llmClient := llm.NewClient(cfg.LLM.URL, cfg.LLM.Model, cfg.APIKey, cfg.LLM.Name)
 	defer llmClient.Close()
 
 	ttsClient := tts.NewClient(cfg.TTS.URL, cfg.TTS.Model, cfg.TTS.Voice, cfg.APIKey, cfg.TTS.Format, cfg.TTS.SampleRate)

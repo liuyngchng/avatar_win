@@ -9,35 +9,6 @@
     html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
     #canvas { display: block; cursor: default; }
 
-    /* Status overlay */
-    .status {
-      position: fixed; bottom: 40px; left: 0; right: 0;
-      text-align: center; color: rgba(255,255,255,0.7);
-      font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-      font-size: 16px; pointer-events: none;
-      transition: opacity 0.3s;
-    }
-    .status.hidden { opacity: 0; }
-
-    /* Subtitle bar */
-    .subtitle {
-      position: fixed; bottom: 80px; left: 10%; right: 10%;
-      text-align: center; color: rgba(255,255,255,0.85);
-      font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
-      font-size: 20px; pointer-events: none;
-      text-shadow: 0 0 8px rgba(0,0,0,0.5);
-      transition: opacity 0.3s;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .subtitle.hidden { opacity: 0; }
-
-    /* Click anywhere */
-    .tap-hint {
-      position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
-      color: rgba(255,255,255,0.25); font-size: 14px; pointer-events: none;
-      font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
-    }
-
     /* Loading overlay */
     .loading {
       position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
@@ -49,10 +20,7 @@
 <body>
   <canvas id="canvas"></canvas>
   <div class="loading" id="loading">加载中...</div>
-  <div class="tap-hint" id="tapHint" style="display:none">点击屏幕开始对话</div>
-  <div class="subtitle hidden" id="subtitle"></div>
-  <div class="status" id="status"></div>
-
+  
   <!-- All JS loaded locally (no CDN, for air-gapped deployment) -->
   <script type="importmap">
   {
@@ -75,7 +43,6 @@
     let currentMode = 'idle';
     let currentEmotion = 'neutral';
     let isSpeaking = false;
-    let responseText = '';
 
     // Viseme state (for smooth lerp)
     // VRM1 uses: aa, ih, ou, ee, oh (not A/I/U/E/O)
@@ -171,8 +138,6 @@
       console.log('VRM loaded:', vrm.meta?.metaVersion);
       console.log('Expressions:', Object.keys(vrm.expressionManager?.expressionMap || {}));
       document.getElementById('loading').style.display = 'none';
-      document.getElementById('tapHint').style.display = 'block';
-      updateStatus();
 
       // Auto-fit the window to the avatar's bounding box so the entire body
       // (including legs) is visible.
@@ -266,8 +231,6 @@
 
       console.log('Placeholder avatar created');
       document.getElementById('loading').style.display = 'none';
-      document.getElementById('tapHint').style.display = 'block';
-      updateStatus();
 
       // Auto-fit the window to the avatar's bounding box.
       setTimeout(fitWindowToAvatar, 100);
@@ -492,37 +455,6 @@
       group.rotation.z = Math.sin(t * 0.7) * 0.01;
     }
 
-    // ─── Status UI ──────────────────────────────────────────
-    function updateStatus() {
-      const el = document.getElementById('status');
-      const sub = document.getElementById('subtitle');
-      const hint = document.getElementById('tapHint');
-
-      switch (currentMode) {
-        case 'idle':
-          el.textContent = '';
-          sub.classList.add('hidden');
-          hint.style.display = 'block';
-          break;
-        case 'listening':
-          el.textContent = '聆听中...';
-          sub.classList.add('hidden');
-          hint.style.display = 'none';
-          break;
-        case 'thinking':
-          el.textContent = '思考中...';
-          sub.classList.add('hidden');
-          hint.style.display = 'none';
-          break;
-        case 'speaking':
-          el.textContent = '';
-          sub.textContent = responseText || '';
-          sub.classList.remove('hidden');
-          hint.style.display = 'none';
-          break;
-      }
-    }
-
     // ─── JS Bridge: Receive messages from Go ─────────────────
     // Called by Go via Eval: handleMessage(jsonString)
     window.handleMessage = function(jsonStr) {
@@ -536,9 +468,7 @@
         if (msg.mode) {
           currentMode = msg.mode;
           isSpeaking = msg.isSpeaking || false;
-          responseText = msg.responseText || '';
           if (msg.emotion) currentEmotion = msg.emotion;
-          updateStatus();
           applyModeToVRM();
         }
       } catch (e) {
