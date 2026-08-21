@@ -95,6 +95,7 @@ func main() {
 	// Initialize audio recorder.
 	recorder := audio.NewRecorder()
 	log.Println("main: [4/5] audio recorder created OK")
+	defer recorder.Stop()
 
 	// Step 5: Start the brain (state machine) and event loops.
 	log.Println("main: [5/5] starting brain state machine...")

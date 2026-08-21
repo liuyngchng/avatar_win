@@ -3,8 +3,10 @@ package brain
 import (
 	"log"
 	"math"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/liuyngchng/avatar-pc/internal/asr"
 	"github.com/liuyngchng/avatar-pc/internal/audio"
@@ -144,7 +146,11 @@ func (sm *StateMachine) setState(mode Mode, emotion Emotion, responseText string
 }
 
 // pipeline runs a full conversation turn:
-// record → ASR → LLM → TTS → play + viseme → idle.
+// record → ASR → LLM (stream) + TTS (overlap) → play + viseme → idle.
+//
+// LLM and TTS run concurrently: as soon as a complete sentence arrives from
+// the streaming LLM, it is sent to TTS while the LLM continues generating
+// the next sentence. This cuts the LLM→TTS serial wait time significantly.
 //
 // gen is the generation number at the time this pipeline was created.
 // If a newer generation exists (the user tapped again), this pipeline
@@ -230,58 +236,149 @@ func (sm *StateMachine) pipeline(gen int64) {
 		return
 	}
 
-	// 3. LLM.
+	// 3. LLM (streaming) + TTS (overlap).
+	// LLM tokens arrive via a channel; we accumulate them into sentences.
+	// When a sentence boundary is reached, we immediately send it to TTS
+	// while the LLM keeps generating the next sentence.
+	// Once all LLM tokens are collected, we wait for the final TTS to finish.
 	tLLMStart := time.Now() // ⏱ LLM start
-	replyText, err := sm.llmClient.Chat(userText)
-	tLLMEnd := time.Now() // ⏱ LLM end
-	if canceled() {
-		log.Printf("state: canceled after LLM (gen=%d)", gen)
-		return
-	}
-	if err != nil {
-		log.Printf("state: LLM failed: %v", err)
-		sm.setState(ModeIdle, EmotionNeutral, "")
-		sm.emit()
-		return
-	}
-	replyText = trimSpace(replyText)
-	if replyText == "" {
-		log.Printf("state: LLM returned empty reply")
-		sm.setState(ModeIdle, EmotionNeutral, "")
-		sm.emit()
-		return
+	llmCh := sm.llmClient.ChatStream(userText)
+
+	// Collect all synthesized audio and sentences.
+	var allSamples []float32
+	var allSentences []string
+	sampleRate := 24000 // TTS output sample rate; set from first result
+	tTTSStart := time.Now() // ⏱ TTS overall start (first synthesis)
+	tLLMFirstToken := time.Time{}
+	tLLMLastToken := time.Time{}
+	llmFirstTokenSet := false
+
+	var sb strings.Builder
+	ttsDone := make(chan struct{}) // closed when the TTS goroutine is done
+	ttsErrs := make(chan error, 1) // buffered so goroutine never blocks on error
+
+	// TTS goroutine: receives sentences, synthesizes them one at a time.
+	// This runs concurrently with the LLM stream consumer.
+	sentenceCh := make(chan string, 4)
+	go func() {
+		defer close(ttsDone)
+		for sentence := range sentenceCh {
+			if canceled() {
+				return
+			}
+			result, err := sm.ttsClient.Synthesize(sentence, 1.0)
+			if err != nil {
+				log.Printf("state: TTS failed for sentence %q: %v", sentence, err)
+				ttsErrs <- err
+				return
+			}
+			sampleRate = result.SampleRate
+			allSamples = append(allSamples, result.Samples...)
+			allSentences = append(allSentences, sentence)
+		}
+	}()
+
+	// Consume LLM stream, splitting on sentence boundaries (。！？!?).
+	// We only split when we have at least minSentenceLen runes and a
+	// sentence-ending punctuation, to avoid sending tiny fragments to TTS.
+	const minSentenceLen = 4
+	llmDone := false
+	for !llmDone {
+		select {
+		case token, ok := <-llmCh:
+			if !ok {
+				llmDone = true
+				if !llmFirstTokenSet {
+					tLLMLastToken = time.Now()
+				}
+				break
+			}
+			if !llmFirstTokenSet {
+				tLLMFirstToken = time.Now()
+				llmFirstTokenSet = true
+			}
+			tLLMLastToken = time.Now()
+			sb.WriteString(token)
+			// Check whether we have a complete sentence.
+			current := sb.String()
+			idx := sentenceEndIndex(current)
+			if idx > 0 && utf8.RuneCountInString(current[:idx]) >= minSentenceLen {
+				sentence := strings.TrimSpace(current[:idx])
+				rest := strings.TrimSpace(current[idx:])
+				sb.Reset()
+				sb.WriteString(rest)
+				if sentence != "" {
+					sentenceCh <- sentence
+				}
+			}
+		case <-cancel:
+			close(sentenceCh)
+			<-ttsDone
+			log.Printf("state: canceled during LLM (gen=%d)", gen)
+			return
+		}
 	}
 
-	sm.setState(ModeThinking, EmotionHappy, replyText)
-	log.Printf("⏱ [timing] LLM: %dms (total elapsed: %dms)", tLLMEnd.Sub(tLLMStart).Milliseconds(), tLLMEnd.Sub(t0).Milliseconds())
-
-	if canceled() {
-		log.Printf("state: canceled before TTS (gen=%d)", gen)
-		return
+	// Flush any remaining text as the last sentence.
+	// Only send if it has meaningful content (>1 rune, not just whitespace/punct).
+	remaining := strings.TrimSpace(sb.String())
+	if utf8.RuneCountInString(remaining) >= 2 {
+		sentenceCh <- remaining
+	} else {
+		log.Printf("state: discarding short sentence tail %q (%d runes)", remaining, utf8.RuneCountInString(remaining))
 	}
 
-	// 4. TTS.
-	tTTSStart := time.Now() // ⏱ TTS start
-	result, err := sm.ttsClient.Synthesize(replyText, 1.0)
-	tTTSEnd := time.Now() // ⏱ TTS end
-	if canceled() {
-		log.Printf("state: canceled after TTS (gen=%d)", gen)
-		return
-	}
-	if err != nil {
+	// Close sentenceCh so the TTS goroutine finishes.
+	close(sentenceCh)
+	<-ttsDone
+
+	// Check for TTS errors.
+	select {
+	case err := <-ttsErrs:
 		log.Printf("state: TTS failed: %v", err)
 		sm.setState(ModeIdle, EmotionNeutral, "")
 		sm.emit()
 		return
+	default:
 	}
 
-	// 5. Generate viseme timeline.
-	audioDur := time.Duration(float64(len(result.Samples)) / float64(result.SampleRate) * float64(time.Second))
+	if canceled() {
+		log.Printf("state: canceled after TTS (gen=%d)", gen)
+		return
+	}
+
+	if len(allSamples) == 0 {
+		log.Printf("state: TTS produced no audio")
+		sm.setState(ModeIdle, EmotionNeutral, "")
+		sm.emit()
+		return
+	}
+
+	// Reconstruct the full reply text for state display.
+	replyText := strings.Join(allSentences, "")
+	sm.setState(ModeThinking, EmotionHappy, replyText)
+
+	// LLM timing: first_token = when we got the first chunk, last_token = when the stream ended.
+	// TTS timing: from first sentence sent to TTS until last sentence TTS completed.
+	tTTSEnd := time.Now()
+	tLLMEnd := tLLMLastToken
+
+	if llmFirstTokenSet {
+		log.Printf("⏱ [timing] LLM: first_token=%dms, stream_done=%dms (total elapsed: %dms)",
+			tLLMFirstToken.Sub(tLLMStart).Milliseconds(),
+			tLLMEnd.Sub(tLLMStart).Milliseconds(),
+			tLLMEnd.Sub(t0).Milliseconds())
+	} else {
+		log.Printf("⏱ [timing] LLM: stream_done=%dms (total elapsed: %dms)", tLLMEnd.Sub(tLLMStart).Milliseconds(), tLLMEnd.Sub(t0).Milliseconds())
+	}
+
+	// 4. Generate viseme timeline.
+	audioDur := time.Duration(float64(len(allSamples)) / float64(sampleRate) * float64(time.Second))
 	timeline := GenerateVisemeTimeline(replyText, audioDur)
 	log.Printf("state: viseme timeline: %d entries, total audio %.1fs (gen=%d)", len(timeline), audioDur.Seconds(), gen)
-	log.Printf("⏱ [timing] TTS: %dms (total elapsed: %dms)", tTTSEnd.Sub(tTTSStart).Milliseconds(), tTTSEnd.Sub(t0).Milliseconds())
+	log.Printf("⏱ [timing] TTS: %dms (overlap with LLM, total elapsed: %dms)", tTTSEnd.Sub(tTTSStart).Milliseconds(), tTTSEnd.Sub(t0).Milliseconds())
 
-	// 6. Speak.
+	// 5. Speak.
 	if sm.audioPlayer == nil {
 		log.Printf("state: audio player is nil, skipping playback")
 		sm.mu.Lock()
@@ -299,7 +396,7 @@ func (sm *StateMachine) pipeline(gen int64) {
 	sm.emit()
 
 	tPlayStart := time.Now() // ⏱ playback start
-	player, err := sm.audioPlayer.Play(result.Samples)
+	player, err := sm.audioPlayer.Play(allSamples)
 	if err != nil {
 		log.Printf("state: audio play error: %v", err)
 		sm.mu.Lock()
@@ -321,7 +418,7 @@ func (sm *StateMachine) pipeline(gen int64) {
 	default:
 	}
 
-	// 7. Back to idle.
+	// 6. Back to idle.
 	sm.mu.Lock()
 	sm.state.IsSpeaking = false
 	sm.mu.Unlock()
@@ -329,15 +426,31 @@ func (sm *StateMachine) pipeline(gen int64) {
 	sm.emit()
 
 	// ⏱ Final timing summary for the entire pipeline.
-	log.Printf("⏱ [timing] playback: %dms | TOTAL pipeline: %dms (rec=%.1f%%, asr=%.1f%%, llm=%.1f%%, tts=%.1f%%, play=%.1f%%)",
+	// LLM and TTS overlap, so use the later of the two for total.
+	overlapEnd := tTTSEnd
+	if tLLMEnd.After(tTTSEnd) {
+		overlapEnd = tLLMEnd
+	}
+	log.Printf("⏱ [timing] playback: %dms | TOTAL pipeline: %dms (rec=%.1f%%, asr=%.1f%%, llm+tts overlap=%.1f%%, play=%.1f%%)",
 		tPlayEnd.Sub(tPlayStart).Milliseconds(),
 		tPlayEnd.Sub(t0).Milliseconds(),
 		float64(tRecEnd.Sub(tRecStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
 		float64(tASREnd.Sub(tASRStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
-		float64(tLLMEnd.Sub(tLLMStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
-		float64(tTTSEnd.Sub(tTTSStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
+		float64(overlapEnd.Sub(tLLMStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
 		float64(tPlayEnd.Sub(tPlayStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
 	)
+}
+
+// sentenceEndIndex returns the byte index after the first sentence-ending
+// punctuation (。！？!?) in s, or 0 if none found.
+func sentenceEndIndex(s string) int {
+	runes := []rune(s)
+	for i, r := range runes {
+		if r == '。' || r == '！' || r == '？' || r == '!' || r == '?' {
+			return len(string(runes[:i+1]))
+		}
+	}
+	return 0
 }
 
 // speakWithCancel drives viseme timeline while audio plays. If the cancel
@@ -392,12 +505,13 @@ func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 		log.Printf("state: recording failed: %v", err)
 		return nil
 	}
-	// Never defer Stop() here — if we're cancelled, the next pipeline's
-	// Start() call already owns the recorder and our Stop() would kill it.
+	// The recorder is persistent — Start() returns a fresh subscriber
+	// channel each time. We don't call Stop() here; the WASAPI session
+	// stays alive across recordings.
 
 	const (
 		speechThreshold = 0.01                 // RMS above this counts as speech
-		silenceDuration = 1500 * time.Millisecond // silence to end the turn
+		silenceDuration = 800 * time.Millisecond // silence to end the turn
 		maxDuration     = 30 * time.Second        // hard safety cap
 	)
 

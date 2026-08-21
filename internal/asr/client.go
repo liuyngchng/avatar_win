@@ -76,10 +76,10 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 	t0 := time.Now()
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	// Ensure we have a live connection.
 	if err := c.ensureConnectedLocked(); err != nil {
+		c.mu.Unlock()
 		return "", err
 	}
 
@@ -109,13 +109,19 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 		log.Printf("asr: write run-task failed, reconnecting: %v", err)
 		c.closeLocked()
 		if err2 := c.ensureConnectedLocked(); err2 != nil {
+			c.mu.Unlock()
 			return "", err2
 		}
 		if err := c.conn.WriteJSON(runTask); err != nil {
+			c.mu.Unlock()
 			return "", fmt.Errorf("asr: send run-task: %w", err)
 		}
 	}
 	log.Printf("asr: sent run-task (task=%s, model=%s)", taskID, c.model)
+
+	// Snapshot the connection and release the lock before blocking on reads.
+	conn := c.conn
+	c.mu.Unlock()
 
 	// Read loop: wait for task-started, then send audio, then collect results.
 	var finalText string
@@ -124,11 +130,12 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 	done := make(chan struct{})
 	var readErr error
 
-	// Read messages in a goroutine.
+	// Read messages in a goroutine. Use the local conn so we don't need
+	// the lock — the connection is stable across a single task.
 	go func() {
 		defer close(done)
 		for {
-			msgType, msg, err := c.conn.ReadMessage()
+			msgType, msg, err := conn.ReadMessage()
 			if err != nil {
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 					return
@@ -158,7 +165,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 				if !audioSent {
 					audioSent = true
 					go func() {
-						if err := c.sendAudio(c.conn, samples, sampleRate); err != nil {
+						if err := c.sendAudio(conn, samples, sampleRate); err != nil {
 							log.Printf("asr: send audio: %v", err)
 						}
 						// Send finish-task.
@@ -172,7 +179,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 								"input": map[string]interface{}{},
 							},
 						}
-						if err := c.conn.WriteJSON(finishTask); err != nil {
+						if err := conn.WriteJSON(finishTask); err != nil {
 							log.Printf("asr: send finish-task: %v", err)
 						}
 						log.Printf("asr: sent finish-task")
@@ -212,12 +219,16 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 	<-done
 
 	if readErr != nil {
+		c.mu.Lock()
 		c.closeLocked() // connection is in an unknown state, reconnect next time
+		c.mu.Unlock()
 		return "", readErr
 	}
 
 	if !taskStarted {
+		c.mu.Lock()
 		c.closeLocked()
+		c.mu.Unlock()
 		return "", fmt.Errorf("asr: task never started")
 	}
 

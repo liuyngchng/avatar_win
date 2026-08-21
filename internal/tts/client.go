@@ -113,10 +113,9 @@ func (c *Client) Synthesize(text string, speed float32) (*SynthesizeResult, erro
 	t0 := time.Now()
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// Ensure we have a live connection (lazy connect / auto-reconnect).
 	if err := c.ensureConnectedLocked(); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
 
@@ -130,9 +129,11 @@ func (c *Client) Synthesize(text string, speed float32) (*SynthesizeResult, erro
 		log.Printf("tts: write append failed, reconnecting: %v", err)
 		c.closeLocked()
 		if err2 := c.ensureConnectedLocked(); err2 != nil {
+			c.mu.Unlock()
 			return nil, err2
 		}
 		if err := c.conn.WriteJSON(appendEvent); err != nil {
+			c.mu.Unlock()
 			return nil, fmt.Errorf("tts: send input_text_buffer.append: %w", err)
 		}
 	}
@@ -144,16 +145,26 @@ func (c *Client) Synthesize(text string, speed float32) (*SynthesizeResult, erro
 		"type":     "input_text_buffer.commit",
 	}
 	if err := c.conn.WriteJSON(commitEvent); err != nil {
+		c.mu.Unlock()
 		return nil, fmt.Errorf("tts: send input_text_buffer.commit: %w", err)
 	}
 	log.Printf("tts: sent input_text_buffer.commit")
 
+	// Snapshot the connection and release the lock before blocking on reads.
+	// This prevents one hung synthesis from deadlocking the entire client.
+	conn := c.conn
+	c.mu.Unlock()
+
 	// Read loop: collect audio deltas until response.done.
+	// Set a 30s deadline so a hung server doesn't block forever.
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	var allSamples []float32
-	readErr := c.readAudioLoop(&allSamples)
+	readErr := c.readAudioLoopConn(conn, &allSamples)
 
 	if readErr != nil {
+		c.mu.Lock()
 		c.closeLocked() // connection is in an unknown state, reconnect next time
+		c.mu.Unlock()
 		return nil, readErr
 	}
 
@@ -258,12 +269,13 @@ func (c *Client) ensureConnectedLocked() error {
 	return nil
 }
 
-// readAudioLoop reads messages from the connection until response.done,
+// readAudioLoopConn reads messages from the given connection until response.done,
 // collecting audio deltas along the way. Returns an error if the server
-// reports one or the connection is broken.
-func (c *Client) readAudioLoop(allSamples *[]float32) error {
+// reports one or the connection is broken. The caller must set a read deadline
+// on conn before calling to avoid hanging forever.
+func (c *Client) readAudioLoopConn(conn *websocket.Conn, allSamples *[]float32) error {
 	for {
-		_, msg, err := c.conn.ReadMessage()
+		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			return fmt.Errorf("tts: read message: %w", err)
 		}

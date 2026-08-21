@@ -6,9 +6,11 @@ package audio
 type Recorder interface {
 	// Start begins recording and returns a channel that emits audio
 	// chunks. Each chunk is a slice of float32 samples normalized in
-	// [-1, 1]. The channel is closed when recording stops.
+	// [-1, 1]. The underlying WASAPI session is kept alive across
+	// calls; only the first call pays the full initialization cost.
 	Start() (<-chan []float32, error)
 
-	// Stop stops recording and closes the samples channel.
+	// Stop permanently stops recording and releases the WASAPI session.
+	// Call this only on application shutdown.
 	Stop()
 }
