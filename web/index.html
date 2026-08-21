@@ -112,6 +112,8 @@
     // No background or fog — transparent.
 
     const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 50);
+    // Initial camera position — will be recomputed by fitWindowToAvatar() once
+    // the avatar is loaded so the entire body (including legs) is visible.
     camera.position.set(0, 0.9, 3.5);
     camera.lookAt(0, 0.7, 0);
 
@@ -164,6 +166,10 @@
       document.getElementById('loading').style.display = 'none';
       document.getElementById('tapHint').style.display = 'block';
       updateStatus();
+
+      // Auto-fit the window to the avatar's bounding box so the entire body
+      // (including legs) is visible.
+      setTimeout(fitWindowToAvatar, 100);
     }
 
     // Rotate upper arms from T-pose (arms horizontal) to a natural hanging pose.
@@ -255,6 +261,50 @@
       document.getElementById('loading').style.display = 'none';
       document.getElementById('tapHint').style.display = 'block';
       updateStatus();
+
+      // Auto-fit the window to the avatar's bounding box.
+      setTimeout(fitWindowToAvatar, 100);
+    }
+
+    // ─── Auto-fit window to avatar bounding box ─────────────────
+    // Computes the world-space bounding box of the avatar, then adjusts the
+    // camera distance so the entire body (including legs) is visible. The
+    // window size is kept unchanged — only the camera is repositioned.
+    function fitWindowToAvatar() {
+      const box = new THREE.Box3();
+      scene.traverse((obj) => {
+        if (!obj.isMesh) return;
+        box.expandByObject(obj);
+      });
+      if (box.isEmpty()) return;
+
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      const center = new THREE.Vector3();
+      box.getCenter(center);
+
+      console.log('avatar world bbox:', size.x.toFixed(2), 'x', size.y.toFixed(2),
+                  'center:', center.x.toFixed(2), center.y.toFixed(2), center.z.toFixed(2));
+
+      // Margin so the avatar is tight to the window edges, not clipped.
+      const margin = 1.08;
+      const fovRad = camera.fov * Math.PI / 180;
+
+      // Compute camera distance so the avatar's height fills the vertical FOV.
+      const distV = (size.y * margin) / (2 * Math.tan(fovRad / 2));
+      // Compute camera distance so the avatar's width fills the horizontal FOV.
+      const distH = (size.x * margin) / (2 * Math.tan(fovRad / 2) * camera.aspect);
+      // Use the larger distance so the avatar fits in both dimensions.
+      const dist = Math.max(distV, distH);
+
+      // Position the camera directly in front of the avatar's center.
+      camera.position.set(center.x, center.y, dist);
+      camera.lookAt(center.x, center.y, center.z);
+      camera.near = Math.max(0.01, dist * 0.1);
+      camera.updateProjectionMatrix();
+
+      console.log('fitWindowToAvatar: camera dist:', dist.toFixed(1),
+                  'pos:', camera.position.x.toFixed(2), camera.position.y.toFixed(2));
     }
 
     // ─── Animation Loop ─────────────────────────────────────
@@ -548,11 +598,18 @@
     // visible viewport. y is clamped so the feet stay above the bottom edge;
     // the margin keeps a little headroom below and above.
     function clampAvatarBase() {
-      const depth = camera.position.z;   // distance from camera to the avatar drag plane
+      const obj = vrm ? vrm.scene : (window._placeholder ? window._placeholder.group : null);
+      if (!obj) return;
+
+      // Perpendicular distance from the camera to the plane (through the
+      // avatar, facing the camera) on which the avatar is dragged.
+      const forward = camera.getWorldDirection(new THREE.Vector3());
+      const toAvatar = new THREE.Vector3().subVectors(obj.position, camera.position);
+      const depth = Math.max(toAvatar.dot(forward), 0.1);
+
       const halfH = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * depth;
       const halfW = halfH * camera.aspect;
 
-      const obj = vrm ? vrm.scene : (window._placeholder ? window._placeholder.group : null);
       // Approximate the avatar's horizontal half-extent (arms) and vertical
       // extent (head above, feet below). Placeholder is ~1.7 units tall,
       // VRM is roughly similar.
