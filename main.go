@@ -67,13 +67,13 @@ func main() {
 	// Step 3: Initialize online clients (Alibaba Cloud Bailian APIs).
 	// These are network-dependent — log failures but don't fatal.
 	log.Println("main: [3/5] initializing API clients...")
-	asrClient := asr.NewClient(cfg.ASR.URL, cfg.ASR.Model, cfg.APIKey)
+	asrClient := asr.NewClient(cfg.ASR.URL, cfg.ASR.Model, cfg.APIKey, cfg.ASR.Format, cfg.ASR.SampleRate)
 	defer asrClient.Close()
 
 	llmClient := llm.NewClient(cfg.LLM.URL, cfg.LLM.Model, cfg.APIKey)
 	defer llmClient.Close()
 
-	ttsClient := tts.NewClient(cfg.TTS.URL, cfg.TTS.Model, cfg.TTS.Voice, cfg.APIKey)
+	ttsClient := tts.NewClient(cfg.TTS.URL, cfg.TTS.Model, cfg.TTS.Voice, cfg.APIKey, cfg.TTS.Format, cfg.TTS.SampleRate)
 	defer ttsClient.Close()
 
 	log.Printf("main: [3/5] ASR endpoint=%s (model=%s)", cfg.ASR.URL, cfg.ASR.Model)

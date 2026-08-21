@@ -15,6 +15,7 @@ replace github.com/jchv/go-webview2 => ./third_party/go-webview2
 
 require (
 	github.com/ebitengine/purego v0.9.0 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
 	golang.org/x/sys v0.36.0 // indirect
 )

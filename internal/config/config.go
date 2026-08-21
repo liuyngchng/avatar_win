@@ -19,8 +19,10 @@ type Cfg struct {
 
 // ASRConfig holds the speech recognition configuration.
 type ASRConfig struct {
-	URL   string `yaml:"url"`
-	Model string `yaml:"model"`
+	URL        string `yaml:"url"`
+	Model      string `yaml:"model"`
+	Format     string `yaml:"format"`
+	SampleRate int    `yaml:"sample_rate"`
 }
 
 // LLMConfig holds the chat model endpoint and model name.
@@ -31,9 +33,11 @@ type LLMConfig struct {
 
 // TTSConfig holds the text-to-speech configuration.
 type TTSConfig struct {
-	URL   string `yaml:"url"`
-	Model string `yaml:"model"`
-	Voice string `yaml:"voice"`
+	URL        string `yaml:"url"`
+	Model      string `yaml:"model"`
+	Voice      string `yaml:"voice"`
+	Format     string `yaml:"format"`
+	SampleRate int    `yaml:"sample_rate"`
 }
 
 // Load reads cfg.yml from the same directory as the executable, or from
