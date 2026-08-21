@@ -54,7 +54,8 @@
     let blinkTimer = 0;
     let blinkInterval = 3.0;    // seconds between blinks
     let blinkValue = 0;
-    let isBlinking = false;
+    // Blink phase: 'open' → 'closing' → 'closed' → 'opening' → 'open'
+    let blinkPhase = 'open';
 
     // Idle micro-movement
     let idleTime = 0;
@@ -331,35 +332,48 @@
 
     // ─── VRM: Blink ─────────────────────────────────────────
     function updateVRMBlink(dt) {
-      blinkTimer += dt;
-
-      if (!isBlinking && blinkTimer > blinkInterval) {
-        isBlinking = true;
-        blinkTimer = 0;
-        blinkInterval = 2.5 + Math.random() * 4.0;
-        blinkValue = 0;
+      // Apply blink (VRM1 preset name is 'blink') every frame.
+      if (vrm.expressionManager && blinkValue > 0.001) {
+        vrm.expressionManager.setValue('blink', blinkValue);
       }
 
-      if (isBlinking) {
+      // Waiting for the next blink.
+      if (blinkPhase === 'open') {
+        blinkTimer += dt;
+        if (blinkTimer > blinkInterval) {
+          blinkPhase = 'closing';
+          blinkTimer = 0;
+          blinkInterval = 2.5 + Math.random() * 4.0;
+        }
+        return;
+      }
+
+      if (blinkPhase === 'closing') {
         blinkValue += dt * 12; // fast close
         if (blinkValue >= 1.0) {
           blinkValue = 1.0;
-          // hold briefly then open
-          blinkTimer += dt;
-          if (blinkTimer > 0.12) {
-            blinkValue -= dt * 12;
-            if (blinkValue <= 0) {
-              blinkValue = 0;
-              isBlinking = false;
-              blinkTimer = 0;
-            }
-          }
+          blinkPhase = 'closed';
+          blinkTimer = 0;
         }
+        return;
       }
 
-      // Apply blink (VRM1 preset name is 'blink')
-      if (vrm.expressionManager && blinkValue > 0.001) {
-        vrm.expressionManager.setValue('blink', blinkValue);
+      if (blinkPhase === 'closed') {
+        blinkTimer += dt;
+        if (blinkTimer > 0.12) {
+          blinkPhase = 'opening';
+        }
+        return;
+      }
+
+      if (blinkPhase === 'opening') {
+        blinkValue -= dt * 12; // open
+        if (blinkValue <= 0) {
+          blinkValue = 0;
+          blinkPhase = 'open';
+          blinkTimer = 0;
+        }
+        return;
       }
     }
 
@@ -393,32 +407,47 @@
 
     // ─── Placeholder: Blink ─────────────────────────────────
     let placeholderBlink = 0;
-    let placeholderBlinking = false;
+    let placeholderBlinkPhase = 'open';
     let placeholderBlinkTimer = 0;
 
     function updatePlaceholderBlink(dt) {
       const { leftEye, rightEye } = window._placeholder;
-      placeholderBlinkTimer += dt;
-      const blinkInterval = 3.0;
 
-      if (!placeholderBlinking && placeholderBlinkTimer > blinkInterval) {
-        placeholderBlinking = true;
-        placeholderBlink = 0;
+      if (placeholderBlinkPhase === 'open') {
+        placeholderBlinkTimer += dt;
+        if (placeholderBlinkTimer > 3.0) {
+          placeholderBlinkPhase = 'closing';
+          placeholderBlinkTimer = 0;
+        }
+        return;
       }
 
-      if (placeholderBlinking) {
+      if (placeholderBlinkPhase === 'closing') {
         placeholderBlink += dt * 10;
         if (placeholderBlink >= 1.0) {
-          placeholderBlinkTimer += dt;
-          if (placeholderBlinkTimer > 0.15) {
-            placeholderBlink -= dt * 10;
-            if (placeholderBlink <= 0) {
-              placeholderBlink = 0;
-              placeholderBlinking = false;
-              placeholderBlinkTimer = 0;
-            }
-          }
+          placeholderBlink = 1.0;
+          placeholderBlinkPhase = 'closed';
+          placeholderBlinkTimer = 0;
         }
+        return;
+      }
+
+      if (placeholderBlinkPhase === 'closed') {
+        placeholderBlinkTimer += dt;
+        if (placeholderBlinkTimer > 0.15) {
+          placeholderBlinkPhase = 'opening';
+        }
+        return;
+      }
+
+      if (placeholderBlinkPhase === 'opening') {
+        placeholderBlink -= dt * 10;
+        if (placeholderBlink <= 0) {
+          placeholderBlink = 0;
+          placeholderBlinkPhase = 'open';
+          placeholderBlinkTimer = 0;
+        }
+        return;
       }
 
       const eyeScale = 1 - placeholderBlink * 0.9;
