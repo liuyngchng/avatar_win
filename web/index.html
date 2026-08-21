@@ -169,6 +169,56 @@
       if (rightUpperArm) {
         rightUpperArm.rotation.set(0, 0, armDown - armOut);
       }
+
+      // Curl fingers into a natural relaxed pose.
+      setFingerPose();
+    }
+
+    // Curl finger bones into a natural relaxed hand pose.
+    // In a relaxed standing posture, fingers are slightly bent, not straight.
+    // Each finger curls progressively — proximal bends least, distal bends most.
+    function setFingerPose() {
+      if (!vrm?.humanoid) return;
+
+      const sides = ['left', 'right'];
+      // Fingers: index, middle, ring, little — each has proximal, intermediate, distal.
+      // Curl amount varies by finger: little curls most, index least.
+      const fingerCurl = {
+        index:  { proximal: 0.15, intermediate: 0.25, distal: 0.15 },
+        middle: { proximal: 0.12, intermediate: 0.20, distal: 0.12 },
+        ring:   { proximal: 0.18, intermediate: 0.28, distal: 0.18 },
+        little: { proximal: 0.22, intermediate: 0.35, distal: 0.22 },
+      };
+
+      for (const side of sides) {
+        // Left and right hands are mirror images: curling toward the palm
+        // (toward the torso) is +Z on one hand and -Z on the other.
+        const curlDir = side === 'left' ? -1 : 1;
+
+        for (const [finger, angles] of Object.entries(fingerCurl)) {
+          const cap = finger.charAt(0).toUpperCase() + finger.slice(1);
+          const proximal = vrm.humanoid.getNormalizedBoneNode(side + cap + 'Proximal');
+          const intermediate = vrm.humanoid.getNormalizedBoneNode(side + cap + 'Intermediate');
+          const distal = vrm.humanoid.getNormalizedBoneNode(side + cap + 'Distal');
+
+          // Curl around the local Z axis (bend toward palm).
+          if (proximal)     proximal.rotation.z     += curlDir * angles.proximal;
+          if (intermediate) intermediate.rotation.z += curlDir * angles.intermediate;
+          if (distal)       distal.rotation.z       += curlDir * angles.distal;
+        }
+
+        // Thumb: metacarpal → proximal → intermediate → distal
+        const thumbMeta  = vrm.humanoid.getNormalizedBoneNode(side + 'ThumbMetacarpal');
+        const thumbProx  = vrm.humanoid.getNormalizedBoneNode(side + 'ThumbProximal');
+        const thumbInter = vrm.humanoid.getNormalizedBoneNode(side + 'ThumbIntermediate');
+        const thumbDist  = vrm.humanoid.getNormalizedBoneNode(side + 'ThumbDistal');
+
+        // Thumb curls inward toward palm; metacarpal gets a small inward twist.
+        if (thumbMeta)  thumbMeta.rotation.z  += curlDir * 0.10;
+        if (thumbProx)  thumbProx.rotation.z  += curlDir * 0.15;
+        if (thumbInter) thumbInter.rotation.z += curlDir * 0.10;
+        if (thumbDist)  thumbDist.rotation.z  += curlDir * 0.08;
+      }
     }
 
     // ─── Try to load a local VRM model, fallback to a simple placeholder ──
