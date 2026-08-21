@@ -96,7 +96,16 @@
     // Idle breathing/sway is layered on top of avatarBaseY, so dragging and
     // idle animation don't fight each other.
     const avatarBase = { x: 0, y: -0.95 };
+    // Measured avatar extents (world units) relative to the avatar's root —
+    // the position that avatarBase controls. Populated by fitWindowToAvatar()
+    // once the model's bounding box is known. These fallbacks match the old
+    // hardcoded guesses until the model is loaded.
+    const avatarBounds = { halfW: 0.55, top: 0.95, bottom: 0.0, centerX: 0 };
     let dragAvatar = null; // { plane, offset, prevX, prevY, avatarObj } while dragging the avatar
+
+    // Keyboard movement state — WASD + arrow keys.
+    const keys = { left: false, right: false, up: false, down: false };
+    const moveSpeed = 0.4; // world units per second
 
     // ─── Three.js Setup ─────────────────────────────────────
     const canvas = document.getElementById('canvas');
@@ -286,6 +295,21 @@
       console.log('avatar world bbox:', size.x.toFixed(2), 'x', size.y.toFixed(2),
                   'center:', center.x.toFixed(2), center.y.toFixed(2), center.z.toFixed(2));
 
+      // Store the real measured dimensions for clampAvatarBase to use.
+      // All values are stored root-relative — i.e. as offsets from the
+      // avatar's root position (avatarBase), which sits at the feet.
+      // fitWindowToAvatar runs while the avatar is at its default position
+      // {0, -0.95, 0}, so we subtract avatarBase from the world-space bbox.
+      const top = center.y + size.y / 2;
+      const bottom = center.y - size.y / 2;
+      avatarBounds.halfW = size.x / 2;
+      avatarBounds.top = top - avatarBase.y;
+      avatarBounds.bottom = bottom - avatarBase.y;
+      avatarBounds.centerX = center.x - avatarBase.x;
+      console.log('avatarBounds (root-relative): halfW:', avatarBounds.halfW.toFixed(2),
+                  'top:', avatarBounds.top.toFixed(2), 'bottom:', avatarBounds.bottom.toFixed(2),
+                  'centerX:', avatarBounds.centerX.toFixed(2));
+
       // Margin so the avatar is tight to the window edges, not clipped.
       const margin = 1.08;
       const fovRad = camera.fov * Math.PI / 180;
@@ -319,6 +343,7 @@
         updateVRMBlink(dt);
         updateVRMVisemes(dt);
         updateVRMIdleMicro(dt);
+        updateKeyboardMove(dt);
 
         // VRM needs to be updated each frame for expressions to apply
         vrm.update(dt);
@@ -326,6 +351,7 @@
         updatePlaceholderBlink(dt);
         updatePlaceholderMouth(dt);
         updatePlaceholderIdle(dt);
+        updateKeyboardMove(dt);
       }
 
       renderer.render(scene, camera);
@@ -595,8 +621,9 @@
     }
 
     // Clamp the avatar's base (x, y) so it always stays fully inside the
-    // visible viewport. y is clamped so the feet stay above the bottom edge;
-    // the margin keeps a little headroom below and above.
+    // visible viewport. Uses the avatar's real measured extents (avatarBounds)
+    // so the avatar can move all the way to the window edges without being
+    // clipped — and can't be dragged past them.
     function clampAvatarBase() {
       const obj = vrm ? vrm.scene : (window._placeholder ? window._placeholder.group : null);
       if (!obj) return;
@@ -610,20 +637,51 @@
       const halfH = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * depth;
       const halfW = halfH * camera.aspect;
 
-      // Approximate the avatar's horizontal half-extent (arms) and vertical
-      // extent (head above, feet below). Placeholder is ~1.7 units tall,
-      // VRM is roughly similar.
-      const halfBodyW = 0.55;
-      const topExtent = 0.95;   // distance from origin (feet) to the top of the head
-      const bottomMargin = 0.1;  // small gap left under the feet
+      // How far the avatar extends horizontally from its center line, and how
+      // far it extends up/down from its root. The root (avatarBase) sits at the
+      // feet, so vertical bounds must leave the head below the top edge and the
+      // feet above the bottom edge.
+      const bodyHalfW = avatarBounds.halfW + avatarBounds.centerX;
+      const bodyHalfWLeft = avatarBounds.halfW - avatarBounds.centerX;
+      const headRoom = avatarBounds.top;   // head top above the root
+      // If the mesh bottom is below the root (feet extend past root), keep
+      // that clearance; otherwise the root itself is the lowest point.
+      const footRoom = Math.max(0, -avatarBounds.bottom);
 
-      const minX = -halfW + halfBodyW;
-      const maxX = halfW - halfBodyW;
-      const minY = -halfH + bottomMargin;
-      const maxY = halfH - topExtent;
+      const minX = -halfW + bodyHalfWLeft;
+      const maxX = halfW - bodyHalfW;
+      const minY = -halfH + footRoom;
+      const maxY = halfH - headRoom;
 
       avatarBase.x = Math.min(Math.max(avatarBase.x, minX), maxX);
       avatarBase.y = Math.min(Math.max(avatarBase.y, minY), maxY);
+    }
+
+    // Move the avatar smoothly via WASD / arrow keys. Runs every frame so
+    // holding a key glides the avatar; movement is in the camera-facing plane,
+    // matching how dragging works. Diagonal movement is not normalized (it's
+    // ~1.4x faster) — acceptable for this use case.
+    function updateKeyboardMove(dt) {
+      if (dragAvatar) return; // don't fight an active drag
+
+      let dx = 0, dy = 0;
+      if (keys.left)  dx -= 1;
+      if (keys.right) dx += 1;
+      if (keys.down)  dy -= 1;
+      if (keys.up)    dy += 1;
+      if (dx === 0 && dy === 0) return;
+
+      avatarBase.x += dx * moveSpeed * dt;
+      avatarBase.y += dy * moveSpeed * dt;
+      clampAvatarBase();
+
+      // Apply the new position immediately (idle micro-movement re-adds its
+      // own offset on top of avatarBase each frame).
+      const obj = vrm ? vrm.scene : (window._placeholder ? window._placeholder.group : null);
+      if (obj) {
+        obj.position.x = avatarBase.x;
+        obj.position.y = avatarBase.y;
+      }
     }
 
     // Determine (once) the drag plane and the avatar's offset from the grab
@@ -742,9 +800,30 @@
     });
 
     document.addEventListener('keydown', (e) => {
+      // Don't consume shortcuts when the user is typing in an input.
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
         sendEvent('tap', {});
+        return;
+      }
+
+      // WASD + arrow keys for avatar movement.
+      switch (e.key) {
+        case 'w': case 'W': case 'ArrowUp':    keys.up    = true; e.preventDefault(); break;
+        case 's': case 'S': case 'ArrowDown':  keys.down  = true; e.preventDefault(); break;
+        case 'a': case 'A': case 'ArrowLeft':  keys.left  = true; e.preventDefault(); break;
+        case 'd': case 'D': case 'ArrowRight': keys.right = true; e.preventDefault(); break;
+      }
+    });
+
+    document.addEventListener('keyup', (e) => {
+      switch (e.key) {
+        case 'w': case 'W': case 'ArrowUp':    keys.up    = false; break;
+        case 's': case 'S': case 'ArrowDown':  keys.down  = false; break;
+        case 'a': case 'A': case 'ArrowLeft':  keys.left  = false; break;
+        case 'd': case 'D': case 'ArrowRight': keys.right = false; break;
       }
     });
 
