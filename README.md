@@ -28,12 +28,12 @@
 
 | 层 | 技术 | 说明 |
 |----|------|------|
-| 后端语言 | Go 1.23+ | 单一静态二进制，零依赖部署 |
+| 后端语言 | Go 1.24+ | 单一静态二进制，零依赖部署 |
 | 窗口宿主 | WebView2 | Edge/Chromium 内核，Win10 1809+ 系统自带 |
 | 3D 渲染 | three.js + three-vrm | WebGL 硬件加速，VRM 模型标准 |
-| 对话 | LLM HTTP 流式 API | 阿里云百炼 Bailian（可配置其他 OpenAI 兼容 API） |
-| ASR | 阿里云实时语音识别 | 流式 WebSocket 长连接 |
-| TTS | 阿里云语音合成 | 阿里云百炼语音合成 |
+| 对话 | LLM HTTP API | 阿里云百炼 Bailian（可配置其他 OpenAI 兼容 API） |
+| ASR | 阿里云语音识别 | HTTP POST（OpenAI 兼容接口） |
+| TTS | 阿里云语音合成 | HTTP POST（multimodal-generation） |
 
 ## 状态机
 
@@ -59,7 +59,7 @@ avatar_win/
 ├── README.md
 ├── go.mod / go.sum
 ├── main.go                    # 入口，启动窗口 + 大脑
-├── build.sh                   # 构建脚本
+├── build.ps1                  # 构建脚本（Windows PowerShell，无需安装任何东西）
 ├── cfg.yml                    # 配置文件
 ├── internal/
 │   ├── brain/
@@ -114,12 +114,12 @@ avatar_win/
 
 ## 构建
 
-```bash
-# 增量构建
-bash build.sh
+```powershell
+# 增量构建（Windows PowerShell，无需安装任何东西）
+powershell -ExecutionPolicy Bypass -File build.ps1
 
 # 构建 + 打包 zip
-bash build.sh release
+powershell -ExecutionPolicy Bypass -File build.ps1 release
 ```
 
 产物：`dist/avatar-pc.exe`（22MB，单文件，自签名）。
@@ -129,17 +129,17 @@ bash build.sh release
 复制 `cfg.yml.example` 为 `cfg.yml`，填入阿里云百炼 API Key：
 
 ```yaml
-api_key: "your-api-key"
 asr:
-  url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
-  model: "paraformer-realtime-v2"
+  url: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
+  model: "qwen3-asr-flash"
 llm:
-  url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  url: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
   model: "qwen-plus"
 tts:
-  url: "https://dashscope.aliyuncs.com/api-ws/v1/tts"
-  model: "qwen-tts"
-  voice: "longxiaochun"
+  url: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+  model: "qwen3-tts-flash"
+  voice: "Cherry"
+api_key: "your-api-key"
 ```
 
 ## 使用

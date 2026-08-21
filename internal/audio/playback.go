@@ -1,5 +1,4 @@
-// Package audio provides PCM audio playback using oto (ALSA on Linux,
-// WASAPI on Windows).
+// Package audio provides PCM audio playback using oto (WASAPI on Windows).
 package audio
 
 import (

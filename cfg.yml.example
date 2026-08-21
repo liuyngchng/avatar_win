@@ -21,7 +21,7 @@ tts:
   # DashScope 原生接口（非 OpenAI 兼容），北京地域
   url: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
   model: "qwen3-tts-flash"
-  # 音色: Cherry / Stella / Luna / Bella / Nick / Ethan / Liam / Owen / Lily / Emily / Bella / Leo
+  # 音色: Cherry / Stella / Luna / Bella / Nick / Ethan / Liam / Owen / Lily / Emily / Leo
   voice: "Cherry"
 
 # 百炼 API Key（从 https://bailian.console.aliyun.com 获取）

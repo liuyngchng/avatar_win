@@ -18,7 +18,7 @@ Avatar PC 是一款运行在 Windows 大屏/PC 上的 **3D 数字人问答应用
 | 项目 | 最低要求 |
 |------|---------|
 | 操作系统 | Windows 10 1809 及以上（推荐 Windows 11） |
-| 内存 | 4 GB 及以上 |
+| 内存 | 8 GB 及以上 |
 | 磁盘 | 100 MB 可用空间 |
 | 网络 | 可访问公网（阿里云百炼服务） |
 | 麦克风 | 可用的麦克风设备 |
@@ -34,17 +34,17 @@ Avatar PC 是一款运行在 Windows 大屏/PC 上的 **3D 数字人问答应用
 软件无需安装，**解压即可运行**。交付物包含两个文件：
 
 ```
-avatar.exe     — 主程序（约 25 MB）
+avatar-pc.exe — 主程序（约 25 MB）
 cfg.yml        — 配置文件
 ```
 
 ### 步骤 1：放置文件
 
-将 `avatar.exe` 和 `cfg.yml` 放在**同一个文件夹**里，例如：
+将 `avatar-pc.exe` 和 `cfg.yml` 放在**同一个文件夹**里，例如：
 
 ```
 D:\数字人\
-  ├── avatar.exe
+  ├── avatar-pc.exe
   └── cfg.yml
 ```
 
@@ -56,7 +56,7 @@ D:\数字人\
 
 ### 步骤 3：双击运行
 
-双击 `avatar.exe` 即可启动，会弹出一个窗口，里面站着 3D 数字人。
+双击 `avatar-pc.exe` 即可启动，会弹出一个窗口，里面站着 3D 数字人。
 
 ---
 
@@ -66,11 +66,11 @@ D:\数字人\
 
 ```yaml
 asr:                              # 语音识别（听用户说话）
-  url: "https://你的WorkspaceId.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
+  url: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
   model: "qwen3-asr-flash"
 
 llm:                              # 大模型对话（生成回答）
-  url: "https://你的WorkspaceId.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
+  url: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
   model: "qwen-plus"
 
 tts:                              # 语音合成（把文字念出来）
@@ -136,7 +136,7 @@ api_key: "sk-xxxxxxxxxxxx"
 
 ### 退出
 
-- 直接关闭窗口即可；或在启动它的命令行/终端按 `Ctrl + C`。
+- 按 **Alt + F4** 关闭窗口；或从任务管理器结束 `avatar-pc.exe` 进程。
 
 ---
 
@@ -144,7 +144,7 @@ api_key: "sk-xxxxxxxxxxxx"
 
 ### 1. 双击后没反应 / 闪退
 
-- 确认 `cfg.yml` 和 `avatar.exe` 在同一个文件夹。
+- 确认 `cfg.yml` 和 `avatar-pc.exe` 在同一个文件夹。
 - 用记事本打开 `cfg.yml`，确认 `api_key` 和 url 里的 `WorkspaceId` 都填了，且没有拼错。
 - 确认 `api_key` 前后有引号 `"..."`，冒号后有一个空格。
 
@@ -181,10 +181,11 @@ api_key: "sk-xxxxxxxxxxxx"
 
 | 文件 | 说明 | 是否必填 |
 |------|------|---------|
-| `avatar.exe` | 主程序 | 无需改动 |
+| `avatar-pc.exe` | 主程序 | 无需改动 |
 | `cfg.yml` | 配置文件 | **需要填写** WorkspaceId、API Key |
+| `cfg.yml.example` | 配置模板 | 参考，可删除 |
 
-> 所有依赖（3D 模型、前端资源）都已打包进 `avatar.exe`，无需额外安装。
+> 所有依赖（3D 模型、前端资源）都已打包进 `avatar-pc.exe`，无需额外安装。
 
 ---
 

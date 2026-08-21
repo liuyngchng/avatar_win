@@ -1,6 +1,6 @@
 // Package main is the entry point for the Avatar PC application.
-// It creates a window (WebView2 on Windows, Lorca on Linux) and
-// loads the 3D digital human rendering page.
+// It creates a window (WebView2 on Windows) and loads the 3D digital
+// human rendering page.
 //
 // Configuration is read from cfg.yml in the same directory as the
 // executable. See cfg.yml for the available options.
