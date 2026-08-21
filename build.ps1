@@ -8,7 +8,7 @@
 #
 # 产物:
 #   dist/avatar-pc.exe     # 独立可执行文件（已签名）
-#   dist/avatar-pc.zip     # 发布包：exe + cfg.yml.example + 使用说明.md
+#   dist/avatar-pc.zip     # 发布包：exe + cfg.yml + 使用说明.md
 #
 # 签名说明:
 #   使用自签名证书（cert/avatar-pc.pfx），构建时自动生成。
@@ -39,7 +39,7 @@ $CERT_PASS  = "avatar-pc-selfsign"  # 自签名证书密码（仅本地开发用
 
 # 要打包进 zip 的附加文件（相对于项目根目录）
 $EXTRA_FILES = @(
-    @{ Src = "cfg.yml.example";  Dst = "cfg.yml.example" },
+    @{ Src = "cfg.yml.template"; Dst = "cfg.yml" },
     @{ Src = "USER_MANUAL.md";   Dst = "使用说明.md" }
 )
 
@@ -292,4 +292,4 @@ Write-Host "╚═════════════════════�
 Write-Host ""
 Write-Host "  To distribute, send the user:"
 Write-Host "    1. $ZIP_NAME — extract and double-click $EXE_NAME"
-Write-Host "    2. cfg.yml.example → rename to cfg.yml and fill in API key"
+Write-Host "    2. Edit cfg.yml and fill in WorkspaceId + API key"

@@ -61,6 +61,10 @@ type WebView interface {
 	// windows.
 	MoveBy(dx int, dy int)
 
+	// Center re-centers the window on the primary screen. Useful after
+	// a SetSize call to keep the window centered.
+	Center()
+
 	// Navigate navigates webview to the given URL. URL may be a data URI, i.e.
 	// "data:text/text,<html>...</html>". It is often ok not to url-encode it
 	// properly, webview will re-encode it for you.

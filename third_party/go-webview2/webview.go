@@ -542,3 +542,24 @@ func (w *webview) MoveBy(dx, dy int) {
 		w32.SWPNoZOrder|w32.SWPNoSize|w32.SWPNoActivate,
 	)
 }
+
+// Center re-centers the window on the primary screen. Call after SetSize to
+// keep the window centered after a resize.
+func (w *webview) Center() {
+	var rect w32.Rect
+	w32.GetWindowRect(w.hwnd, &rect)
+	cw := rect.Right - rect.Left
+	ch := rect.Bottom - rect.Top
+	screenW, _, _ := w32.User32GetSystemMetrics.Call(w32.SM_CXSCREEN)
+	screenH, _, _ := w32.User32GetSystemMetrics.Call(w32.SM_CYSCREEN)
+	if screenW == 0 || screenH == 0 {
+		return
+	}
+	x := int32((int(screenW) - int(cw)) / 2)
+	y := int32((int(screenH) - int(ch)) / 2)
+	_, _, _ = w32.User32SetWindowPos.Call(
+		w.hwnd, 0,
+		uintptr(x), uintptr(y), 0, 0,
+		w32.SWPNoZOrder|w32.SWPNoSize|w32.SWPNoActivate,
+	)
+}

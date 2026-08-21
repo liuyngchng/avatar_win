@@ -100,6 +100,17 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 			log.Printf("renderer: bind moveWindow warning: %v", err)
 		}
 
+		// Bind goBridge_setWindowSize so JS can resize + center the window.
+		// The avatar should be screen-height/2, so JS computes the desired
+		// pixel size from the avatar's bounding box and the screen metrics,
+		// then calls this to apply it.
+		if err := w.Bind("goBridge_setWindowSize", func(width, height int) {
+			w.SetSize(width, height, webview2.HintNone)
+			w.Center()
+		}); err != nil {
+			log.Printf("renderer: bind setWindowSize warning: %v", err)
+		}
+
 		w.Navigate(url)
 		ready <- nil
 

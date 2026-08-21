@@ -100,7 +100,8 @@
     // the position that avatarBase controls. Populated by fitWindowToAvatar()
     // once the model's bounding box is known. These fallbacks match the old
     // hardcoded guesses until the model is loaded.
-    const avatarBounds = { halfW: 0.55, top: 0.95, bottom: 0.0, centerX: 0 };
+    const avatarBounds = { halfW: 0.55, top: 0.95, bottom: 0.0, centerX: 0,
+                             worldW: 1.1, worldH: 1.7, worldCenter: new THREE.Vector3(0, 0.85, 0) };
     let dragAvatar = null; // { plane, offset, prevX, prevY, avatarObj } while dragging the avatar
 
     // Keyboard movement state — WASD + arrow keys.
@@ -276,9 +277,9 @@
     }
 
     // ─── Auto-fit window to avatar bounding box ─────────────────
-    // Computes the world-space bounding box of the avatar, then adjusts the
-    // camera distance so the entire body (including legs) is visible. The
-    // window size is kept unchanged — only the camera is repositioned.
+    // Measures the avatar's bounding box, then resizes the window so the
+    // avatar's on-screen height equals half the screen height.  The window
+    // aspect ratio matches the avatar's width/height ratio.
     function fitWindowToAvatar() {
       const box = new THREE.Box3();
       scene.traverse((obj) => {
@@ -295,39 +296,59 @@
       console.log('avatar world bbox:', size.x.toFixed(2), 'x', size.y.toFixed(2),
                   'center:', center.x.toFixed(2), center.y.toFixed(2), center.z.toFixed(2));
 
-      // Store the real measured dimensions for clampAvatarBase to use.
-      // All values are stored root-relative — i.e. as offsets from the
-      // avatar's root position (avatarBase), which sits at the feet.
-      // fitWindowToAvatar runs while the avatar is at its default position
-      // {0, -0.95, 0}, so we subtract avatarBase from the world-space bbox.
+      // Store root-relative extents for clampAvatarBase.
       const top = center.y + size.y / 2;
       const bottom = center.y - size.y / 2;
       avatarBounds.halfW = size.x / 2;
       avatarBounds.top = top - avatarBase.y;
       avatarBounds.bottom = bottom - avatarBase.y;
       avatarBounds.centerX = center.x - avatarBase.x;
+      avatarBounds.worldW = size.x;
+      avatarBounds.worldH = size.y;
+      avatarBounds.worldCenter.copy(center);
       console.log('avatarBounds (root-relative): halfW:', avatarBounds.halfW.toFixed(2),
                   'top:', avatarBounds.top.toFixed(2), 'bottom:', avatarBounds.bottom.toFixed(2),
                   'centerX:', avatarBounds.centerX.toFixed(2));
 
-      // Margin so the avatar is tight to the window edges, not clipped.
-      const margin = 1.08;
+      // Target: avatar height = half the screen height.
+      // The window height is set to the target avatar pixel height; the
+      // camera fit (fitCameraToWindow) adds a small margin internally so
+      // the avatar doesn't touch the window edges.
+      const targetPxH = Math.round(screen.height * 0.5);
+      const winH = targetPxH;
+      const aspect = size.x / size.y;
+      const winW = Math.round(winH * aspect);
+
+      console.log('fitWindowToAvatar: target px height:', targetPxH,
+                  'window:', winW, 'x', winH);
+
+      // Tell Go to resize + center the window, then fit the camera.
+      if (window.goBridge_setWindowSize) {
+        window.goBridge_setWindowSize(winW, winH);
+      }
+      // Defer camera fit to next frame — the window may not have resized yet.
+      setTimeout(fitCameraToWindow, 50);
+    }
+
+    // Adjusts the camera distance so the avatar fills the current window,
+    // keeping the same margin. Called on resize and after initial window fit.
+    function fitCameraToWindow() {
+      if (!avatarBounds.worldH) return;
+
+      const margin = 1.02;
       const fovRad = camera.fov * Math.PI / 180;
 
-      // Compute camera distance so the avatar's height fills the vertical FOV.
-      const distV = (size.y * margin) / (2 * Math.tan(fovRad / 2));
-      // Compute camera distance so the avatar's width fills the horizontal FOV.
-      const distH = (size.x * margin) / (2 * Math.tan(fovRad / 2) * camera.aspect);
-      // Use the larger distance so the avatar fits in both dimensions.
-      const dist = Math.max(distV, distH);
+      const distH = (avatarBounds.worldW * margin) / (2 * Math.tan(fovRad / 2) * camera.aspect);
+      const distV = (avatarBounds.worldH * margin) / (2 * Math.tan(fovRad / 2));
+      const dist = Math.max(distH, distV);
 
-      // Position the camera directly in front of the avatar's center.
+      const center = avatarBounds.worldCenter;
       camera.position.set(center.x, center.y, dist);
       camera.lookAt(center.x, center.y, center.z);
       camera.near = Math.max(0.01, dist * 0.1);
       camera.updateProjectionMatrix();
 
-      console.log('fitWindowToAvatar: camera dist:', dist.toFixed(1),
+      console.log('fitCameraToWindow: dist:', dist.toFixed(1),
                   'pos:', camera.position.x.toFixed(2), camera.position.y.toFixed(2));
     }
 
@@ -831,7 +852,8 @@
     window.addEventListener('resize', () => {
       renderer.setSize(window.innerWidth, window.innerHeight);
       camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
+      // Re-fit the camera so the avatar fills the (now different) window.
+      fitCameraToWindow();
       clampAvatarBase();
       // Re-apply the (possibly clamped) base position.
       if (vrm) {
