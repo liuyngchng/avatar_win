@@ -18,6 +18,9 @@ var (
 	shlwapi                  = windows.NewLazySystemDLL("shlwapi")
 	shlwapiSHCreateMemStream = shlwapi.NewProc("SHCreateMemStream")
 
+	dwmapi                   = windows.NewLazySystemDLL("dwmapi")
+	dwmapiSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
+
 	user32                   = windows.NewLazySystemDLL("user32")
 	User32LoadImageW         = user32.NewProc("LoadImageW")
 	User32GetSystemMetrics   = user32.NewProc("GetSystemMetrics")
@@ -93,11 +96,13 @@ const (
 	WMActivate      = 0x0006
 	WMClose         = 0x0010
 	WMQuit          = 0x0012
+	WMEraseBkgnd    = 0x0014
 	WMGetMinMaxInfo = 0x0024
+	WMNCCalcSize    = 0x0083
 	WMNCLButtonDown = 0x00A1
+	WMNCActivate    = 0x0086
 	WMMoving        = 0x0216
 	WMApp           = 0x8000
-	WMEraseBkgnd    = 0x0014
 )
 
 const (
@@ -136,6 +141,15 @@ const (
 	WAInactive    = 0
 	WAActive      = 1
 	WAActiveClick = 2
+)
+
+// DWM window attributes. Used to control the desktop window manager's
+// per-window decoration (rounded corners / border) for borderless windows.
+const (
+	DWMWA_WINDOW_CORNER_PREFERENCE = 33
+	DWMWCP_DONOTROUND              = 1
+	DWMWCP_ROUND                   = 2
+	DWMWCP_ROUNDSMALL              = 3
 )
 
 type WndClassExW struct {
@@ -214,4 +228,16 @@ func SHCreateMemStream(data []byte) (uintptr, error) {
 func GetWindowRect(hwnd uintptr, rect *Rect) bool {
 	ret, _, _ := User32GetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(rect)))
 	return ret != 0
+}
+
+// DwmSetWindowAttributeInt sets a DWM window attribute to an integer value.
+// Used to control per-window decorations (rounded corners, border color, etc.)
+// for borderless windows.
+func DwmSetWindowAttributeInt(hwnd uintptr, attr, value uint32) {
+	_, _, _ = dwmapiSetWindowAttribute.Call(
+		hwnd,
+		uintptr(attr),
+		uintptr(unsafe.Pointer(&value)),
+		uintptr(unsafe.Sizeof(value)),
+	)
 }
