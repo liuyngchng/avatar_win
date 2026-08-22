@@ -136,7 +136,11 @@ func (r *webviewRenderer) SendMessage(msg any) {
 		return
 	}
 	js := "if(window.handleMessage)handleMessage(" + strconv.Quote(string(data)) + ")"
-	r.webview.Eval(js)
+	// Eval must be called on the main UI thread (WebView2 requirement).
+	// Dispatch marshals the call onto the thread that owns the message pump.
+	r.webview.Dispatch(func() {
+		r.webview.Eval(js)
+	})
 }
 
 func (r *webviewRenderer) Events() <-chan brain.Event {
