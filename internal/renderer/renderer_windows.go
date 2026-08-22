@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"runtime"
 	"strconv"
+	"sync"
 
 	"github.com/jchv/go-webview2"
 	"github.com/liuyngchng/avatar-pc/internal/brain"
@@ -19,6 +20,10 @@ import (
 type webviewRenderer struct {
 	webview webview2.WebView
 	events  chan brain.Event
+	done    chan struct{}
+	// closeOnce guards done so Close() and the window-destroy path can both
+	// signal completion without double-closing the channel.
+	closeOnce sync.Once
 }
 
 // newPlatformRenderer creates a Windows renderer using WebView2.
@@ -40,6 +45,7 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 
 	r := &webviewRenderer{
 		events: make(chan brain.Event, 16),
+		done:   make(chan struct{}),
 	}
 
 	// Create the window and run the message pump on a dedicated OS thread.
@@ -119,6 +125,11 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 		log.Println("renderer: entering message loop")
 		w.Run()
 		log.Println("renderer: message loop exited")
+
+		// The window was destroyed (user clicked X, or programmatic
+		// Destroy()).  Signal that the renderer is done so the main
+		// goroutine can exit cleanly.
+		r.closeOnce.Do(func() { close(r.done) })
 	}()
 
 	if err := <-ready; err != nil {
@@ -147,6 +158,14 @@ func (r *webviewRenderer) Events() <-chan brain.Event {
 	return r.events
 }
 
+func (r *webviewRenderer) Done() <-chan struct{} {
+	return r.done
+}
+
 func (r *webviewRenderer) Close() {
 	r.webview.Destroy()
+	// Signal completion — either the window-destroy path in the goroutine
+	// below already closed `done`, or we close it here (Close() called
+	// programmatically).  Whoever gets there first wins.
+	r.closeOnce.Do(func() { close(r.done) })
 }

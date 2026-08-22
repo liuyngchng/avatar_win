@@ -84,6 +84,21 @@ Write-Host "║  CGO:        disabled (pure Go, no DLL deps)"
 Write-Host ("║  Sign:       self-signed (" + $CERT_PFX + ")")
 Write-Host "╚══════════════════════════════════════════════════╝"
 
+# ── 计时工具（记录各步骤耗时，方便定位慢在哪一步） ─────────────
+$BuildStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$StepStopwatch  = [System.Diagnostics.Stopwatch]::StartNew()
+function Get-TimeStamp { (Get-Date).ToString("HH:mm:ss") }
+function Start-Step([string]$Title) {
+    $StepStopwatch.Restart()
+    $total = $BuildStopwatch.Elapsed.TotalSeconds
+    Write-Host ""
+    Write-Host ("[{0} +{1,7:N1}s] {2}" -f (Get-TimeStamp), $total, $Title)
+}
+function End-Step {
+    $StepStopwatch.Stop()
+    Write-Host ("    [{0} step {1,6:N1}s]" -f (Get-TimeStamp), $StepStopwatch.Elapsed.TotalSeconds)
+}
+
 # ── 签名函数 ────────────────────────────────────────────────
 
 # 生成自签名代码签名证书（若不存在）
@@ -170,8 +185,7 @@ if ($Mode -eq "clean") {
 # ══════════════════════════════════════════════════════════════
 
 # ── Step 1/5: 清理旧产物 ────────────────────────────────────
-Write-Host ""
-Write-Host ">>> Step 1/5: Cleaning old dist/..."
+Start-Step "Step 1/5: Cleaning old dist/..."
 if (Test-Path $DIST_DIR) {
     try {
         Remove-Item -Recurse -Force $DIST_DIR -ErrorAction Stop
@@ -183,33 +197,32 @@ if (Test-Path $DIST_DIR) {
 }
 New-Item -ItemType Directory -Force -Path $DIST_DIR | Out-Null
 Write-Host "    Cleaned."
+End-Step
 
-# ── Step 2/5: 构建 exe (Garble 混淆) ────────────────────────
-Write-Host ""
-Write-Host ">>> Step 2/5: Building $EXE_NAME (garble obfuscated)..."
+# ── Step 2/5: 构建 exe ────────────────────────────────────────
+Start-Step "Step 2/5: Building $EXE_NAME..."
 
 $GO_LDFLAGS = "$LDFLAGS -X main.version=$VERSION -X main.buildTime=$BUILD_TIME"
 $exePath = Join-Path $DIST_DIR $EXE_NAME
 
-# 确保 garble 可用（混淆工具，防止逆向工程）
-$GARBLE = Get-Command garble -ErrorAction SilentlyContinue
-if (-not $GARBLE) {
-    $gopathBin = Join-Path (go env GOPATH) "bin"
-    if (Test-Path (Join-Path $gopathBin "garble.exe")) {
-        $GARBLE = Get-Item (Join-Path $gopathBin "garble.exe")
-    }
-}
-if (-not $GARBLE) {
-    Write-Host "    Installing garble (Go obfuscator)..."
-    & go install mvdan.cc/garble@v0.14.1 2>&1 | Out-Null
-    $gopathBin = Join-Path (go env GOPATH) "bin"
-    if (Test-Path (Join-Path $gopathBin "garble.exe")) {
-        $GARBLE = Get-Item (Join-Path $gopathBin "garble.exe")
+# 混淆 web/index.html 的内联 JS（构建前）。构建完成后务必恢复原文，
+# 否则工作区的 index.html 会一直保持混淆态。
+$INDEX_HTML = "web/index.html"
+$INDEX_HTML_BAK = "web/index.html.orig"
+
+if (Test-Path "scripts/obfuscate.js") {
+    Copy-Item $INDEX_HTML $INDEX_HTML_BAK -Force
+    # javascript-obfuscator 全局安装，require 需通过 NODE_PATH 定位
+    $env:NODE_PATH = (npm root -g)
+    & node scripts/obfuscate.js
+    Remove-Item Env:\NODE_PATH -ErrorAction SilentlyContinue
+    if ($LASTEXITCODE -ne 0) {
+        Move-Item $INDEX_HTML_BAK $INDEX_HTML -Force
+        Write-Host "    WARNING: JS obfuscation failed, building with unobfuscated JS"
     } else {
-        throw "ERROR: garble install failed — check your Go toolchain"
+        Write-Host "    JS obfuscated OK"
     }
 }
-Write-Host "    garble: $($GARBLE.Source)"
 
 # 生成 exe 图标资源（任务栏/窗口图标）。go-winres 从 winres/icon.png
 # 生成 .syso 对象文件，go build 会自动链接它。.syso 文件提交到 git，
@@ -247,34 +260,29 @@ if ($SYSO_NEEDS_REGEN) {
     }
 }
 
-# 设置交叉编译环境变量（构建后恢复）
 $env:CGO_ENABLED = "0"
-$env:GOOS = "windows"
-$env:GOARCH = "amd64"
 try {
-    # garble: 混淆包名、函数名、字符串常量，移除调试信息
-    # -literals  混淆字符串常量（API URL 等不会被 strings 提取）
-    # -tiny      移除额外运行时信息
-    # -seed=random 每次构建使用不同的混淆种子
-    & $GARBLE -literals -tiny -seed=random build -trimpath "-ldflags=$GO_LDFLAGS" -o $exePath .
-    if ($LASTEXITCODE -ne 0) { throw "garble build failed" }
+    & go build -trimpath "-ldflags=$GO_LDFLAGS" -o $exePath .
+    if ($LASTEXITCODE -ne 0) { throw "go build failed" }
 } finally {
     Remove-Item Env:\CGO_ENABLED -ErrorAction SilentlyContinue
-    Remove-Item Env:\GOOS -ErrorAction SilentlyContinue
-    Remove-Item Env:\GOARCH -ErrorAction SilentlyContinue
+    # 恢复 index.html 原文（混淆是构建时的临时操作）
+    if (Test-Path $INDEX_HTML_BAK) {
+        Move-Item $INDEX_HTML_BAK $INDEX_HTML -Force
+    }
 }
 
 $size = (Get-Item $exePath).Length
 Write-Host ("    OK — {0:N1} MB" -f ($size / 1MB))
+End-Step
 
 # ── Step 3/5: 签名 ──────────────────────────────────────────
-Write-Host ""
-Write-Host ">>> Step 3/5: Signing $EXE_NAME..."
+Start-Step "Step 3/5: Signing $EXE_NAME..."
 Invoke-Sign $exePath
+End-Step
 
 # ── Step 4/5: 验证 ──────────────────────────────────────────
-Write-Host ""
-Write-Host ">>> Step 4/5: Verifying..."
+Start-Step "Step 4/5: Verifying..."
 
 # 检查 .exe 存在且 > 1MB
 if ($size -lt 1000000) {
@@ -295,11 +303,11 @@ if ($SIGNTOOL) {
         $ErrorActionPreference = $prevEAP
     }
     Write-Host "    Verify done (self-signed cert is untrusted by Windows — expected, not a failure)"
+End-Step
 }
 
 # ── Step 5/5: 打包 zip ──────────────────────────────────────
-Write-Host ""
-Write-Host ">>> Step 5/5: Packaging release archive..."
+Start-Step "Step 5/5: Packaging release archive..."
 
 $exeZipName = $EXE_NAME  # 在 zip 内保持原名
 
@@ -342,7 +350,12 @@ try {
     $zip.Dispose()
 }
 
+End-Step
+
 # ── 完成 ────────────────────────────────────────────────────
+$BuildStopwatch.Stop()
+Write-Host ""
+Write-Host ("  Total build time: {0:N1}s" -f $BuildStopwatch.Elapsed.TotalSeconds)
 Write-Host ""
 Write-Host "╔══════════════════════════════════════════════════╗"
 Write-Host "║  Build complete!                                ║"

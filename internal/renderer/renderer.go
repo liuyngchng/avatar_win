@@ -11,6 +11,9 @@ import (
 type Renderer interface {
 	SendMessage(msg any)
 	Events() <-chan brain.Event
+	// Done returns a channel that is closed when the renderer window has been
+	// destroyed (user closed the window, or Close() was called).
+	Done() <-chan struct{}
 	Close()
 }
 

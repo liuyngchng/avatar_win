@@ -163,9 +163,16 @@ func main() {
 
 	log.Println("main: all subsystems started, waiting for exit signal...")
 
-	// Wait for SIGINT or SIGTERM.
+	// Wait for one of:
+	//   - User closes the window    → r.Done()
+	//   - SIGINT / SIGTERM (Ctrl+C) → sigCh
+	// In either case we clean up through deferred calls and exit.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigCh
-	log.Printf("main: received signal %v, shutting down...", sig)
+	select {
+	case <-r.Done():
+		log.Println("main: window closed, shutting down...")
+	case sig := <-sigCh:
+		log.Printf("main: received signal %v, shutting down...", sig)
+	}
 }
