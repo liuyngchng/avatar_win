@@ -44,8 +44,9 @@ $EXTRA_FILES = @(
 )
 
 # 构建参数
-$LDFLAGS     = "-s -w -H windowsgui"
-$BUILD_FLAGS = "-trimpath"
+$LDFLAGS = "-s -w -H windowsgui"
+$GOPROXY = "https://goproxy.cn,direct"  # 国内 Go 模块代理
+$env:GOPROXY = $GOPROXY                  # 对所有 go 命令生效
 
 # ── 查找 signtool.exe ───────────────────────────────────────
 function Find-Signtool {
@@ -183,20 +184,80 @@ if (Test-Path $DIST_DIR) {
 New-Item -ItemType Directory -Force -Path $DIST_DIR | Out-Null
 Write-Host "    Cleaned."
 
-# ── Step 2/5: 构建 exe ──────────────────────────────────────
+# ── Step 2/5: 构建 exe (Garble 混淆) ────────────────────────
 Write-Host ""
-Write-Host ">>> Step 2/5: Building $EXE_NAME..."
+Write-Host ">>> Step 2/5: Building $EXE_NAME (garble obfuscated)..."
 
 $GO_LDFLAGS = "$LDFLAGS -X main.version=$VERSION -X main.buildTime=$BUILD_TIME"
 $exePath = Join-Path $DIST_DIR $EXE_NAME
+
+# 确保 garble 可用（混淆工具，防止逆向工程）
+$GARBLE = Get-Command garble -ErrorAction SilentlyContinue
+if (-not $GARBLE) {
+    $gopathBin = Join-Path (go env GOPATH) "bin"
+    if (Test-Path (Join-Path $gopathBin "garble.exe")) {
+        $GARBLE = Get-Item (Join-Path $gopathBin "garble.exe")
+    }
+}
+if (-not $GARBLE) {
+    Write-Host "    Installing garble (Go obfuscator)..."
+    & go install mvdan.cc/garble@v0.14.1 2>&1 | Out-Null
+    $gopathBin = Join-Path (go env GOPATH) "bin"
+    if (Test-Path (Join-Path $gopathBin "garble.exe")) {
+        $GARBLE = Get-Item (Join-Path $gopathBin "garble.exe")
+    } else {
+        throw "ERROR: garble install failed — check your Go toolchain"
+    }
+}
+Write-Host "    garble: $($GARBLE.Source)"
+
+# 生成 exe 图标资源（任务栏/窗口图标）。go-winres 从 winres/icon.png
+# 生成 .syso 对象文件，go build 会自动链接它。.syso 文件提交到 git，
+# 只要 winres/icon.png 没变就直接复用，无需每次构建重新生成。
+$SYSO_FILE = "rsrc_windows_amd64.syso"
+$SYSO_NEEDS_REGEN = $false
+if (Test-Path $SYSO_FILE) {
+    Write-Host "    Icon resource already cached ($SYSO_FILE)"
+} elseif (Test-Path "winres/icon.png") {
+    $SYSO_NEEDS_REGEN = $true
+} else {
+    Write-Host "    No winres/icon.png found — building without custom icon"
+}
+if ($SYSO_NEEDS_REGEN) {
+    $WINRES = Get-Command go-winres -ErrorAction SilentlyContinue
+    if (-not $WINRES) {
+        $gopathBin = Join-Path (go env GOPATH) "bin"
+        if (Test-Path (Join-Path $gopathBin "go-winres.exe")) {
+            $WINRES = Get-Item (Join-Path $gopathBin "go-winres.exe")
+        }
+    }
+    if (-not $WINRES) {
+        Write-Host "    Installing go-winres..."
+        & go install github.com/tc-hib/go-winres@latest 2>&1 | Out-Null
+        $gopathBin = Join-Path (go env GOPATH) "bin"
+        if (Test-Path (Join-Path $gopathBin "go-winres.exe")) {
+            $WINRES = Get-Item (Join-Path $gopathBin "go-winres.exe")
+        }
+    }
+    if ($WINRES) {
+        Write-Host "    Generating icon resource ($SYSO_FILE)..."
+        & $WINRES simply --arch amd64 --manifest gui --product-name "Avatar PC" `
+            --file-description "Desktop Avatar" --icon winres/icon.png
+        if ($LASTEXITCODE -ne 0) { Write-Host "    WARNING: go-winres failed, building without icon" }
+    }
+}
 
 # 设置交叉编译环境变量（构建后恢复）
 $env:CGO_ENABLED = "0"
 $env:GOOS = "windows"
 $env:GOARCH = "amd64"
 try {
-    & go build $BUILD_FLAGS "-ldflags=$GO_LDFLAGS" -o $exePath .
-    if ($LASTEXITCODE -ne 0) { throw "go build failed" }
+    # garble: 混淆包名、函数名、字符串常量，移除调试信息
+    # -literals  混淆字符串常量（API URL 等不会被 strings 提取）
+    # -tiny      移除额外运行时信息
+    # -seed=random 每次构建使用不同的混淆种子
+    & $GARBLE -literals -tiny -seed=random build -trimpath "-ldflags=$GO_LDFLAGS" -o $exePath .
+    if ($LASTEXITCODE -ne 0) { throw "garble build failed" }
 } finally {
     Remove-Item Env:\CGO_ENABLED -ErrorAction SilentlyContinue
     Remove-Item Env:\GOOS -ErrorAction SilentlyContinue

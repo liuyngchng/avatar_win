@@ -127,9 +127,10 @@ const (
 
 const (
 	WSPopup     = 0x80000000
-	WSExLayered = 0x00080000
-	WSExToolWindow = 0x00000080
+	WSExLayered             = 0x00080000
+	WSExToolWindow          = 0x00000080
 	WSExNoRedirectionBitmap = 0x00200000
+	WSExTopmost             = 0x00000008
 )
 
 const (

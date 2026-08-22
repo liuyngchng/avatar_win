@@ -326,7 +326,7 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 		posY = w32.CW_USEDEFAULT
 	}
 
-	// Pick window styles: borderless + layered when Borderless is true.
+	// Pick window styles: borderless + layered + topmost when Borderless is true.
 	windowStyle := uintptr(0xCF0000) // WS_OVERLAPPEDWINDOW
 	exStyle := uintptr(0)
 	if opts.Borderless {
@@ -335,7 +335,8 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 		// style for transparent WebView2: it lets DirectComposition
 		// render directly to the window surface, and transparent parts
 		// of the WebView2 content show the desktop through.
-		exStyle = w32.WSExNoRedirectionBitmap
+		// WS_EX_TOPMOST keeps the window on top of all other windows.
+		exStyle = w32.WSExNoRedirectionBitmap | w32.WSExTopmost
 		// Default to full screen when borderless with zero size.
 		if opts.Width == 0 {
 			sw, _, _ := w32.User32GetSystemMetrics.Call(w32.SM_CXSCREEN)
