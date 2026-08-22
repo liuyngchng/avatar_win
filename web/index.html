@@ -88,8 +88,8 @@
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap; // soft-edged shadows
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.2;
+    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setClearColor(0x000000, 0); // transparent — desktop shows through
 
     const scene = new THREE.Scene();
@@ -102,12 +102,11 @@
     camera.lookAt(0, 0.7, 0);
 
     // ─── Lighting ───────────────────────────────────────────
-    // Ambient — keep it low so shadows create depth. Strong ambient
-    // washes out the light/shadow contrast that makes 3D forms readable.
-    scene.add(new THREE.AmbientLight('#ffffff', 0.35));
+    // Ambient — moderate ambient so the material's base color is visible.
+    scene.add(new THREE.AmbientLight('#ffffff', 0.8));
 
-    // Key light (warm, from upper-right-front) — the main light source.
-    const keyLight = new THREE.DirectionalLight('#fff5e6', 5.0);
+    // Key light (from upper-right-front) — the main light source.
+    const keyLight = new THREE.DirectionalLight('#ffffff', 0.8);
     keyLight.position.set(1.5, 2.5, 2);
     keyLight.target.position.set(0, -0.5, 0); // aim at the avatar's body
     keyLight.castShadow = true;
@@ -122,15 +121,14 @@
     scene.add(keyLight);
     scene.add(keyLight.target); // must add target to scene for .target to take effect
 
-    // Fill light (cool, from lower-left) — softens shadows without
-    // killing them. Kept low so the key→fill ratio preserves depth.
-    const fillLight = new THREE.DirectionalLight('#d0e8ff', 0.8);
+    // Fill light (from lower-left) — softens shadows without killing them.
+    const fillLight = new THREE.DirectionalLight('#d0e8ff', 0.4);
     fillLight.position.set(-1, 0.3, -0.5);
     scene.add(fillLight);
 
     // Rim light (from behind and above) — creates a bright edge/contour
-    // that separates the avatar from the background and emphasizes 3D form.
-    const rimLight = new THREE.DirectionalLight('#ffffff', 4.0);
+    // that separates the avatar from the background.
+    const rimLight = new THREE.DirectionalLight('#ffffff', 0.3);
     rimLight.position.set(0.3, 1.5, -2.5);
     scene.add(rimLight);
 
@@ -362,7 +360,7 @@
       const targetPxH = Math.round(screen.height * 0.5);
       const winH = targetPxH;
       // Square window — width follows the avatar height, not the avatar
-      // width, so the avatar has room to rotate (Ctrl+drag) and the grid
+      // width, so the avatar has room to rotate (drag to orbit) and the grid
       // extends on both sides without clipping.
       const winW = winH;
 
@@ -729,14 +727,15 @@
       }
     }
 
-    // All drags move the window (or orbit, when Ctrl is held).
+    // Ctrl+drag moves the window; a plain drag orbits the camera.
     // { startX, startY, lastX, lastY, moved, isOrbit }
     let dragWindow = null;
 
     document.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return; // left button only
 
-      const isOrbit = keys.ctrl;
+      // Ctrl+drag → move the window. Plain drag → orbit the camera.
+      const isOrbit = !keys.ctrl;
       dragWindow = {
         startX: e.screenX,
         startY: e.screenY,
@@ -749,12 +748,10 @@
 
     document.addEventListener('mousemove', (e) => {
       if (!dragWindow) {
-        // Hover cursor feedback: grab when over the avatar, or rotate when Ctrl is held.
-        if (keys.ctrl) {
-          canvas.style.cursor = hitAvatar(e) ? 'grab' : 'default';
-        } else {
-          canvas.style.cursor = hitAvatar(e) ? 'grab' : 'default';
-        }
+        // Hover cursor: 'grab' for orbit (plain), 'move' for window move (Ctrl).
+        canvas.style.cursor = keys.ctrl
+          ? (hitAvatar(e) ? 'move' : 'default')
+          : (hitAvatar(e) ? 'grab' : 'default');
         return;
       }
 
@@ -771,12 +768,13 @@
 
       if (dragWindow.moved) {
         if (dragWindow.isOrbit) {
-          // Ctrl+drag: orbit the camera around the avatar.
+          // Plain drag: orbit the camera around the avatar.
           orbitTheta -= dx * orbitSpeed;
           orbitPhi += dy * orbitSpeed;
           // Clamp vertical angle so the camera doesn't flip.
           orbitPhi = Math.max(-1.4, Math.min(1.4, orbitPhi));
         } else if (window.goBridge_moveWindow) {
+          // Ctrl+drag: move the window.
           window.goBridge_moveWindow(dx, dy);
         }
       }
