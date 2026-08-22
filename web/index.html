@@ -118,25 +118,6 @@
     rimLight.position.set(0.3, 1.5, -2.5);
     scene.add(rimLight);
 
-    // ─── Environment map for PBR reflections ─────────────────
-    // A simple gradient environment gives the skin/eyes realistic
-    // specular highlights that convey 3D shape.
-    const pmremGenerator = new THREE.PMREMGenerator(renderer);
-    pmremGenerator.compileEquirectangularShader();
-    const envScene = new THREE.Scene();
-    envScene.background = new THREE.Color('#8899bb');
-    // Add a bright "window" light source in the environment for specular.
-    const envLight = new THREE.Mesh(
-      new THREE.PlaneGeometry(4, 4),
-      new THREE.MeshBasicMaterial({ color: '#ffffff', side: THREE.BackSide })
-    );
-    envLight.position.set(0, 3, 0);
-    envScene.add(envLight);
-    const envMap = pmremGenerator.fromScene(envScene).texture;
-    scene.environment = envMap;
-    scene.background = null; // keep transparent bg
-    pmremGenerator.dispose();
-
     // ─── Ground plane ───────────────────────────────────────
     // (Removed — no ground plane, so the transparent background
     //  shows the Windows desktop behind the avatar.)
