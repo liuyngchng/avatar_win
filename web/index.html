@@ -70,8 +70,16 @@
     const avatarBounds = { worldW: 1.1, worldH: 1.7, worldCenter: new THREE.Vector3(0, 0.85, 0) };
 
     // Keyboard movement state — WASD + arrow keys → move the window.
-    const keys = { left: false, right: false, up: false, down: false };
+    const keys = { left: false, right: false, up: false, down: false, ctrl: false };
     const winMoveSpeed = 250; // pixels per second
+
+    // Orbit state — Ctrl + drag rotates the view around the avatar.
+    // The camera orbits around avatarBounds.worldCenter (the avatar's pivot).
+    let orbitActive = false;
+    let orbitTheta = 0;     // horizontal angle (radians), 0 = look from front
+    let orbitPhi = 0;       // vertical angle, positive = look from above
+    let orbitDist = 3.5;    // distance from camera to pivot
+    const orbitSpeed = 0.006; // radians per pixel of drag
 
     // ─── Three.js Setup ─────────────────────────────────────
     const canvas = document.getElementById('canvas');
@@ -79,12 +87,13 @@
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap; // soft-edged shadows
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.2;
     renderer.setClearColor(0x000000, 0); // transparent — desktop shows through
 
     const scene = new THREE.Scene();
-    // No background or fog — transparent.
+    // No background — transparent, desktop shows through.
 
     const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 50);
     // Initial camera position — will be recomputed by fitWindowToAvatar() once
@@ -100,11 +109,18 @@
     // Key light (warm, from upper-right-front) — the main light source.
     const keyLight = new THREE.DirectionalLight('#fff5e6', 5.0);
     keyLight.position.set(1.5, 2.5, 2);
+    keyLight.target.position.set(0, -0.5, 0); // aim at the avatar's body
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.set(1024, 1024);
     keyLight.shadow.camera.near = 0.1;
     keyLight.shadow.camera.far = 20;
+    keyLight.shadow.camera.left = -3;
+    keyLight.shadow.camera.right = 3;
+    keyLight.shadow.camera.top = 3;
+    keyLight.shadow.camera.bottom = -3;
+    keyLight.shadow.bias = -0.0005;
     scene.add(keyLight);
+    scene.add(keyLight.target); // must add target to scene for .target to take effect
 
     // Fill light (cool, from lower-left) — softens shadows without
     // killing them. Kept low so the key→fill ratio preserves depth.
@@ -118,9 +134,26 @@
     rimLight.position.set(0.3, 1.5, -2.5);
     scene.add(rimLight);
 
-    // ─── Ground plane ───────────────────────────────────────
-    // (Removed — no ground plane, so the transparent background
-    //  shows the Windows desktop behind the avatar.)
+    // ─── Ground: grid + shadow disc ─────────────────────────
+    // The shadow disc is invisible but catches the avatar's shadow,
+    // anchoring it to the "ground". The grid gives the 3D world reference
+    // without blocking the desktop background.
+    const groundY = AVATAR_Y; // y-level of the avatar's feet
+
+    const shadowDisc = new THREE.Mesh(
+      new THREE.CircleGeometry(8, 48),
+      new THREE.ShadowMaterial({ opacity: 0.3 })
+    );
+    shadowDisc.rotation.x = -Math.PI / 2;
+    shadowDisc.position.y = groundY;
+    shadowDisc.receiveShadow = true;
+    scene.add(shadowDisc);
+
+    const gridHelper = new THREE.GridHelper(20, 40, 0x888888, 0xcccccc);
+    gridHelper.position.y = groundY;
+    gridHelper.material.opacity = 0.18;
+    gridHelper.material.transparent = true;
+    scene.add(gridHelper);
 
     // ─── Load VRM ───────────────────────────────────────────
     async function loadVRM(url) {
@@ -135,6 +168,12 @@
 
       scene.add(vrm.scene);
       vrm.scene.position.set(0, -0.95, 0);
+
+      // Enable shadow casting on all VRM meshes so the ground plane
+      // can receive the avatar's shadow.
+      vrm.scene.traverse((obj) => {
+        if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; }
+      });
 
       // Set arms to natural hanging pose (T-pose → arms down)
       setArmPose();
@@ -297,7 +336,8 @@
     function fitWindowToAvatar() {
       const box = new THREE.Box3();
       scene.traverse((obj) => {
-        if (!obj.isMesh) return;
+        // Skip the ground helpers — they're huge and would distort the bbox.
+        if (!obj.isMesh || obj === shadowDisc || obj === gridHelper) return;
         box.expandByObject(obj);
       });
       if (box.isEmpty()) return;
@@ -321,8 +361,10 @@
       // the avatar doesn't touch the window edges.
       const targetPxH = Math.round(screen.height * 0.5);
       const winH = targetPxH;
-      const aspect = size.x / size.y;
-      const winW = Math.round(winH * aspect);
+      // Square window — width follows the avatar height, not the avatar
+      // width, so the avatar has room to rotate (Ctrl+drag) and the grid
+      // extends on both sides without clipping.
+      const winW = winH;
 
       console.log('fitWindowToAvatar: target px height:', targetPxH,
                   'window:', winW, 'x', winH);
@@ -347,11 +389,10 @@
       const distV = (avatarBounds.worldH * margin) / (2 * Math.tan(fovRad / 2));
       const dist = Math.max(distH, distV);
 
-      const center = avatarBounds.worldCenter;
-      camera.position.set(center.x, center.y, dist);
-      camera.lookAt(center.x, center.y, center.z);
+      orbitDist = dist;
       camera.near = Math.max(0.01, dist * 0.1);
       camera.updateProjectionMatrix();
+      updateOrbitCamera(); // uses current orbitTheta/orbitPhi/orbitDist
 
       console.log('fitCameraToWindow: dist:', dist.toFixed(1),
                   'pos:', camera.position.x.toFixed(2), camera.position.y.toFixed(2));
@@ -363,6 +404,9 @@
 
       const dt = Math.min(clock.getDelta(), 0.1);
       idleTime += dt;
+
+      // Update orbit camera position from spherical coords.
+      updateOrbitCamera();
 
       if (vrm) {
         // Update VRM
@@ -381,6 +425,24 @@
       }
 
       renderer.render(scene, camera);
+    }
+
+    // ─── Orbit camera ──────────────────────────────────────
+    // Recomputes the camera position from the spherical orbit
+    // coordinates (theta, phi, dist) around the avatar center.
+    function updateOrbitCamera() {
+      const center = avatarBounds.worldCenter;
+      const sp = Math.sin(orbitPhi);
+      const cp = Math.cos(orbitPhi);
+      const st = Math.sin(orbitTheta);
+      const ct = Math.cos(orbitTheta);
+
+      camera.position.set(
+        center.x + orbitDist * cp * st,
+        center.y + orbitDist * sp,
+        center.z + orbitDist * cp * ct
+      );
+      camera.lookAt(center.x, center.y, center.z);
     }
 
     // ─── VRM: Blink ─────────────────────────────────────────
@@ -667,25 +729,32 @@
       }
     }
 
-    // All drags move the window. { startX, startY, lastX, lastY, moved }
+    // All drags move the window (or orbit, when Ctrl is held).
+    // { startX, startY, lastX, lastY, moved, isOrbit }
     let dragWindow = null;
 
     document.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return; // left button only
 
+      const isOrbit = keys.ctrl;
       dragWindow = {
         startX: e.screenX,
         startY: e.screenY,
         lastX: e.screenX,
         lastY: e.screenY,
         moved: false,
+        isOrbit,
       };
     });
 
     document.addEventListener('mousemove', (e) => {
       if (!dragWindow) {
-        // Hover cursor feedback: grab when over the avatar.
-        canvas.style.cursor = hitAvatar(e) ? 'grab' : 'default';
+        // Hover cursor feedback: grab when over the avatar, or rotate when Ctrl is held.
+        if (keys.ctrl) {
+          canvas.style.cursor = hitAvatar(e) ? 'grab' : 'default';
+        } else {
+          canvas.style.cursor = hitAvatar(e) ? 'grab' : 'default';
+        }
         return;
       }
 
@@ -700,8 +769,16 @@
         dragWindow.moved = true;
       }
 
-      if (dragWindow.moved && window.goBridge_moveWindow) {
-        window.goBridge_moveWindow(dx, dy);
+      if (dragWindow.moved) {
+        if (dragWindow.isOrbit) {
+          // Ctrl+drag: orbit the camera around the avatar.
+          orbitTheta -= dx * orbitSpeed;
+          orbitPhi += dy * orbitSpeed;
+          // Clamp vertical angle so the camera doesn't flip.
+          orbitPhi = Math.max(-1.4, Math.min(1.4, orbitPhi));
+        } else if (window.goBridge_moveWindow) {
+          window.goBridge_moveWindow(dx, dy);
+        }
       }
 
       dragWindow.lastX = e.screenX;
@@ -711,9 +788,10 @@
     document.addEventListener('mouseup', (e) => {
       if (!dragWindow) return;
       const wasDrag = dragWindow.moved;
+      const wasOrbit = dragWindow.isOrbit;
       dragWindow = null;
       canvas.style.cursor = 'default';
-      if (!wasDrag) {
+      if (!wasDrag && !wasOrbit) {
         sendEvent('tap', {});
       }
     });
@@ -734,6 +812,7 @@
         case 's': case 'S': case 'ArrowDown':  keys.down  = true; e.preventDefault(); break;
         case 'a': case 'A': case 'ArrowLeft':  keys.left  = true; e.preventDefault(); break;
         case 'd': case 'D': case 'ArrowRight': keys.right = true; e.preventDefault(); break;
+        case 'Control': keys.ctrl = true; break;
       }
     });
 
@@ -743,6 +822,7 @@
         case 's': case 'S': case 'ArrowDown':  keys.down  = false; break;
         case 'a': case 'A': case 'ArrowLeft':  keys.left  = false; break;
         case 'd': case 'D': case 'ArrowRight': keys.right = false; break;
+        case 'Control': keys.ctrl = false; break;
       }
     });
 

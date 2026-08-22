@@ -41,28 +41,25 @@ type TTSConfig struct {
 	SampleRate int    `yaml:"sample_rate"`
 }
 
-// Load reads cfg.yml from the same directory as the executable, or from
-// the current working directory.
+// Load reads cfg.yml from the same directory as the executable.
+//
+// If the file is not found, it returns (nil, nil) — the caller should
+// treat this as "no API configuration available" and run with the
+// renderer only (avatar visible but cannot talk).
+//
+// If the file is found but cannot be parsed, an error is returned.
 func Load() (*Cfg, error) {
-	candidates := []string{
-		filepath.Join(exeDir(), "cfg.yml"),
-		"cfg.yml",
-		filepath.Join("..", "cfg.yml"),
+	path := filepath.Join(exeDir(), "cfg.yml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil // file not found — not an error, just no config
 	}
 
-	for _, p := range candidates {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		var cfg Cfg
-		if err := yaml.Unmarshal(data, &cfg); err != nil {
-			return nil, fmt.Errorf("config: parse %s: %w", p, err)
-		}
-		return &cfg, nil
+	var cfg Cfg
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
-
-	return nil, fmt.Errorf("config: cfg.yml not found in %v", candidates)
+	return &cfg, nil
 }
 
 func exeDir() string {

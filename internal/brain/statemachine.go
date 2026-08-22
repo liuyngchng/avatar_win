@@ -109,6 +109,18 @@ func (sm *StateMachine) emit() {
 func (sm *StateMachine) handleEvent(ev Event) {
 	switch ev.Type {
 	case "tap", "wake_detected":
+		// If no API config was loaded (nil clients), the avatar can't talk.
+		// Log a clear error and return to idle instead of crashing on a
+		// nil-pointer dereference deep in the pipeline.
+		if sm.asrClient == nil || sm.llmClient == nil || sm.ttsClient == nil {
+			log.Printf("state: event=%s → CANNOT TALK: no cfg.yml / API clients not initialized (asr=%v llm=%v tts=%v). "+
+				"Create cfg.yml next to the exe with asr/llm/tts/api_key to enable talking.",
+				ev.Type, sm.asrClient != nil, sm.llmClient != nil, sm.ttsClient != nil)
+			sm.setState(ModeIdle, EmotionNeutral, "")
+			sm.emit()
+			return
+		}
+
 		sm.mu.Lock()
 
 		// Increment generation so any running pipeline knows it's stale.
