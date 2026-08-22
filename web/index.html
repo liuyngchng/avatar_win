@@ -86,18 +86,19 @@
     const scene = new THREE.Scene();
     // No background or fog — transparent.
 
-    const camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 50);
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 50);
     // Initial camera position — will be recomputed by fitWindowToAvatar() once
     // the avatar is loaded so the entire body (including legs) is visible.
     camera.position.set(0, 0.9, 3.5);
     camera.lookAt(0, 0.7, 0);
 
     // ─── Lighting ───────────────────────────────────────────
-    // Ambient
-    scene.add(new THREE.AmbientLight('#ffffff', 1.2));
+    // Ambient — keep it low so shadows create depth. Strong ambient
+    // washes out the light/shadow contrast that makes 3D forms readable.
+    scene.add(new THREE.AmbientLight('#ffffff', 0.35));
 
-    // Key light (warm)
-    const keyLight = new THREE.DirectionalLight('#fff5e6', 3.5);
+    // Key light (warm, from upper-right-front) — the main light source.
+    const keyLight = new THREE.DirectionalLight('#fff5e6', 5.0);
     keyLight.position.set(1.5, 2.5, 2);
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.set(1024, 1024);
@@ -105,15 +106,36 @@
     keyLight.shadow.camera.far = 20;
     scene.add(keyLight);
 
-    // Fill light (cool)
-    const fillLight = new THREE.DirectionalLight('#d0e8ff', 1.5);
-    fillLight.position.set(-1, 0.5, -1);
+    // Fill light (cool, from lower-left) — softens shadows without
+    // killing them. Kept low so the key→fill ratio preserves depth.
+    const fillLight = new THREE.DirectionalLight('#d0e8ff', 0.8);
+    fillLight.position.set(-1, 0.3, -0.5);
     scene.add(fillLight);
 
-    // Rim light
-    const rimLight = new THREE.DirectionalLight('#ffffff', 2.0);
-    rimLight.position.set(0, 0.2, -2);
+    // Rim light (from behind and above) — creates a bright edge/contour
+    // that separates the avatar from the background and emphasizes 3D form.
+    const rimLight = new THREE.DirectionalLight('#ffffff', 4.0);
+    rimLight.position.set(0.3, 1.5, -2.5);
     scene.add(rimLight);
+
+    // ─── Environment map for PBR reflections ─────────────────
+    // A simple gradient environment gives the skin/eyes realistic
+    // specular highlights that convey 3D shape.
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    pmremGenerator.compileEquirectangularShader();
+    const envScene = new THREE.Scene();
+    envScene.background = new THREE.Color('#8899bb');
+    // Add a bright "window" light source in the environment for specular.
+    const envLight = new THREE.Mesh(
+      new THREE.PlaneGeometry(4, 4),
+      new THREE.MeshBasicMaterial({ color: '#ffffff', side: THREE.BackSide })
+    );
+    envLight.position.set(0, 3, 0);
+    envScene.add(envLight);
+    const envMap = pmremGenerator.fromScene(envScene).texture;
+    scene.environment = envMap;
+    scene.background = null; // keep transparent bg
+    pmremGenerator.dispose();
 
     // ─── Ground plane ───────────────────────────────────────
     // (Removed — no ground plane, so the transparent background
@@ -452,7 +474,15 @@
       // Subtle side-to-side sway
       vrm.scene.position.x = Math.sin(t * 0.7) * 0.015;
       vrm.scene.rotation.z = Math.sin(t * 0.7) * 0.015;
-      vrm.scene.rotation.y = Math.sin(t * 0.5) * 0.02;
+      // Gentle body turn so the side profile is occasionally visible —
+      // this is what makes the 3D volume read as "solid" rather than flat.
+      vrm.scene.rotation.y = Math.sin(t * 0.4) * 0.18;
+
+      // Keep the mouth slightly parted in idle so it's always visible.
+      // A natural resting expression has the lips just barely apart.
+      // This tiny 'aa' viseme (4-5% weight) is enough to show the mouth
+      // geometry without looking like the avatar is talking.
+      visemeTargets['aa'] = 0.04 + Math.sin(t * 1.4) * 0.01;
     }
 
     // ─── Placeholder: Blink ─────────────────────────────────
