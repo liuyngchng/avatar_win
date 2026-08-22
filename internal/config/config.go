@@ -49,7 +49,7 @@ type TTSConfig struct {
 //
 // If the file is found but cannot be parsed, an error is returned.
 func Load() (*Cfg, error) {
-	path := filepath.Join(exeDir(), "cfg.yml")
+	path := filepath.Join(workDir(), "cfg.yml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil // file not found — not an error, just no config
@@ -62,10 +62,10 @@ func Load() (*Cfg, error) {
 	return &cfg, nil
 }
 
-func exeDir() string {
-	exe, err := os.Executable()
+func workDir() string {
+	wd, err := os.Getwd()
 	if err != nil {
 		return "."
 	}
-	return filepath.Dir(exe)
+	return wd
 }

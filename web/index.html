@@ -789,7 +789,7 @@
       const wasOrbit = dragWindow.isOrbit;
       dragWindow = null;
       canvas.style.cursor = 'default';
-      if (!wasDrag && !wasOrbit) {
+      if (!wasDrag) {
         sendEvent('tap', {});
       }
     });
