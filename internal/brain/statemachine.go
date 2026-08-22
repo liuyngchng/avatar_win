@@ -378,6 +378,12 @@ func (sm *StateMachine) pipeline(gen int64) {
 	replyText := strings.Join(allSentences, "")
 	sm.setState(ModeThinking, EmotionHappy, replyText)
 
+	// Record the completed turn in the LLM client's conversation history.
+	// This enables multi-turn context for future requests.
+	if sm.llmClient != nil {
+		sm.llmClient.RecordTurn(userText, replyText)
+	}
+
 	// LLM timing: first_token = when we got the first chunk, last_token = when the stream ended.
 	// TTS timing: from first sentence sent to TTS until last sentence TTS completed.
 	tTTSEnd := time.Now()

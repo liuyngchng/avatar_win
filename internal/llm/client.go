@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,22 +21,32 @@ type Client struct {
 	apiKey     string
 	system     string
 	httpClient *http.Client
+
+	mu      sync.Mutex    // guards history
+	history []chatMessage // recent conversation turns, oldest first
 }
+
+// maxHistoryTurns is how many recent turns (a "turn" = one user message +
+// one assistant reply) are kept as context for the next request.
+const maxHistoryTurns = 10
 
 // NewClient creates a new online LLM client.
 func NewClient(baseURL, model, apiKey, name string) *Client {
 	if name == "" {
 		name = "小然"
 	}
+	now := time.Now()
 	return &Client{
 		baseURL: baseURL,
 		model:   model,
 		apiKey:  apiKey,
-		system: "你是一个语音助手，名字叫「" + name + "」。用口语化的中文回复，自然友好、直接明了。" +
-			"闲聊或简单问题控制在1-3句话（80字以内）；" +
-			"知识类问题可以适当展开解释，但保持简洁，不超过150字。" +
-			"围绕用户的问题回答，不要偏离话题。" +
-			"这是一个多轮对话，记住之前聊过的话题，保持一致的语气。",
+		system: fmt.Sprintf(
+			"今天是%s %s。你是一个语音助手，名字叫「%s」。用口语化的中文回复，自然友好、直接明了。"+
+				"闲聊或简单问题控制在1-3句话（80字以内）；"+
+				"知识类问题可以适当展开解释，但保持简洁，不超过150字。"+
+				"围绕用户的问题回答，不要偏离话题。"+
+				"这是一个多轮对话，记住之前聊过的话题，保持一致的语气。",
+			now.Format("2006年1月2日"), weekdayCN(now.Weekday()), name),
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
@@ -83,12 +94,63 @@ type streamChunk struct {
 }
 
 // Chat sends a single user message and returns the assistant's reply.
+// It uses and updates the conversation history.
 func (c *Client) Chat(userText string) (string, error) {
-	messages := []chatMessage{
-		{Role: "system", Content: c.system},
-		{Role: "user", Content: userText},
+	messages := c.buildMessages(userText)
+	reply, err := c.chat(messages)
+	if err != nil {
+		return "", err
 	}
-	return c.chat(messages)
+	c.recordTurn(userText, reply)
+	return reply, nil
+}
+
+// buildMessages assembles the full message list for a request: the system
+// prompt, the recent conversation history, and the new user message.
+func (c *Client) buildMessages(userText string) []chatMessage {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	messages := make([]chatMessage, 0, len(c.history)+2)
+	messages = append(messages, chatMessage{Role: "system", Content: c.system})
+	messages = append(messages, c.history...)
+	messages = append(messages, chatMessage{Role: "user", Content: userText})
+	return messages
+}
+
+// recordTurn appends a completed user→assistant turn to the history,
+// keeping at most maxHistoryTurns turns (oldest dropped first).
+func (c *Client) recordTurn(userText, replyText string) {
+	if replyText == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.history = append(c.history,
+		chatMessage{Role: "user", Content: userText},
+		chatMessage{Role: "assistant", Content: replyText},
+	)
+
+	// Each turn adds 2 messages; trim to maxHistoryTurns turns.
+	maxMessages := maxHistoryTurns * 2
+	if len(c.history) > maxMessages {
+		c.history = c.history[len(c.history)-maxMessages:]
+	}
+}
+
+// RecordTurn appends a completed user→assistant turn to the history. It is
+// used by the streaming path, where the reply is assembled by the caller
+// rather than returned by the client.
+func (c *Client) RecordTurn(userText, replyText string) {
+	c.recordTurn(userText, replyText)
+}
+
+// ResetHistory clears the conversation history.
+func (c *Client) ResetHistory() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.history = c.history[:0]
 }
 
 // chat performs a non-streaming completion request.
@@ -148,13 +210,13 @@ func (c *Client) chat(messages []chatMessage) (string, error) {
 // ChatStream sends a user message and returns a channel that receives text
 // chunks as they arrive from the streaming API. The channel is closed when
 // the stream ends. The caller should drain the channel until it's closed.
+//
+// The caller MUST call RecordTurn(userText, replyText) after consuming the
+// stream to store the conversation history for future requests.
 func (c *Client) ChatStream(userText string) <-chan string {
 	ch := make(chan string, 16)
 
-	messages := []chatMessage{
-		{Role: "system", Content: c.system},
-		{Role: "user", Content: userText},
-	}
+	messages := c.buildMessages(userText)
 
 	go func() {
 		defer close(ch)
@@ -247,4 +309,10 @@ func (c *Client) ChatStream(userText string) <-chan string {
 	}()
 
 	return ch
+}
+
+// weekdayCN returns the Chinese name for a time.Weekday.
+func weekdayCN(d time.Weekday) string {
+	names := [...]string{"星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"}
+	return names[d]
 }
