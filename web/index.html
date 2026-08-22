@@ -43,6 +43,20 @@
     let currentMode = 'idle';
     let currentEmotion = 'neutral';
     let isSpeaking = false;
+    let idleAnimEnabled = true;   // from cfg.yml avatar.idle_animations_enabled
+    let idleAnimState = 'resting';  // 'resting' | 'playing'
+    let idleAnimTimer = 0;          // elapsed time within current phase
+    let idleAnimDuration = 0;       // total duration of current animation
+    let idleRestDuration = 0;       // how long to rest before next anim
+    let idleAnimIndex = -1;         // which animation is playing
+
+    // Bones driven by the idle animation system. The normalized humanoid
+    // bones rest at identity (= T-pose, arms horizontal); see setBone().
+    const POSE_BONES = [
+      'hips', 'spine', 'chest', 'upperChest', 'neck', 'head',
+      'leftShoulder', 'leftUpperArm', 'leftLowerArm', 'leftHand',
+      'rightShoulder', 'rightUpperArm', 'rightLowerArm', 'rightHand',
+    ];
 
     // Viseme state (for smooth lerp)
     // VRM1 uses: aa, ih, ou, ee, oh (not A/I/U/E/O)
@@ -88,8 +102,8 @@
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap; // soft-edged shadows
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.2;
+    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setClearColor(0x000000, 0); // transparent — desktop shows through
 
     const scene = new THREE.Scene();
@@ -102,12 +116,11 @@
     camera.lookAt(0, 0.7, 0);
 
     // ─── Lighting ───────────────────────────────────────────
-    // Ambient — keep it low so shadows create depth. Strong ambient
-    // washes out the light/shadow contrast that makes 3D forms readable.
-    scene.add(new THREE.AmbientLight('#ffffff', 0.35));
+    // Ambient — keep it moderate so the material's base color is visible.
+    scene.add(new THREE.AmbientLight('#ffffff', 0.8));
 
-    // Key light (warm, from upper-right-front) — the main light source.
-    const keyLight = new THREE.DirectionalLight('#fff5e6', 5.0);
+    // Key light (from upper-right-front) — the main light source.
+    const keyLight = new THREE.DirectionalLight('#ffffff', 0.8);
     keyLight.position.set(1.5, 2.5, 2);
     keyLight.target.position.set(0, -0.5, 0); // aim at the avatar's body
     keyLight.castShadow = true;
@@ -122,15 +135,14 @@
     scene.add(keyLight);
     scene.add(keyLight.target); // must add target to scene for .target to take effect
 
-    // Fill light (cool, from lower-left) — softens shadows without
-    // killing them. Kept low so the key→fill ratio preserves depth.
-    const fillLight = new THREE.DirectionalLight('#d0e8ff', 0.8);
+    // Fill light (from lower-left) — softens shadows without killing them.
+    const fillLight = new THREE.DirectionalLight('#d0e8ff', 0.4);
     fillLight.position.set(-1, 0.3, -0.5);
     scene.add(fillLight);
 
     // Rim light (from behind and above) — creates a bright edge/contour
-    // that separates the avatar from the background and emphasizes 3D form.
-    const rimLight = new THREE.DirectionalLight('#ffffff', 4.0);
+    // that separates the avatar from the background.
+    const rimLight = new THREE.DirectionalLight('#ffffff', 0.3);
     rimLight.position.set(0.3, 1.5, -2.5);
     scene.add(rimLight);
 
@@ -175,7 +187,10 @@
         if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; }
       });
 
-      // Set arms to natural hanging pose (T-pose → arms down)
+      // Set the natural standing pose (arms down, fingers curled).
+      // This is the default idle pose; animations drive bones from the
+      // normalized T-pose (identity) baseline, and stopIdleAnimation()
+      // restores this standing pose after each animation / turn.
       setArmPose();
 
       console.log('VRM loaded:', vrm.meta?.metaVersion);
@@ -244,9 +259,9 @@
           const distal = vrm.humanoid.getNormalizedBoneNode(side + cap + 'Distal');
 
           // Curl around the local Z axis (bend toward palm).
-          if (proximal)     proximal.rotation.z     += curlDir * angles.proximal;
-          if (intermediate) intermediate.rotation.z += curlDir * angles.intermediate;
-          if (distal)       distal.rotation.z       += curlDir * angles.distal;
+          if (proximal)     proximal.rotation.z     = curlDir * angles.proximal;
+          if (intermediate) intermediate.rotation.z = curlDir * angles.intermediate;
+          if (distal)       distal.rotation.z       = curlDir * angles.distal;
         }
 
         // Thumb: metacarpal → proximal → intermediate → distal
@@ -256,10 +271,10 @@
         const thumbDist  = vrm.humanoid.getNormalizedBoneNode(side + 'ThumbDistal');
 
         // Thumb curls inward toward palm; metacarpal gets a small inward twist.
-        if (thumbMeta)  thumbMeta.rotation.z  += curlDir * 0.10;
-        if (thumbProx)  thumbProx.rotation.z  += curlDir * 0.15;
-        if (thumbInter) thumbInter.rotation.z += curlDir * 0.10;
-        if (thumbDist)  thumbDist.rotation.z  += curlDir * 0.08;
+        if (thumbMeta)  thumbMeta.rotation.z  = curlDir * 0.10;
+        if (thumbProx)  thumbProx.rotation.z  = curlDir * 0.15;
+        if (thumbInter) thumbInter.rotation.z = curlDir * 0.10;
+        if (thumbDist)  thumbDist.rotation.z  = curlDir * 0.08;
       }
     }
 
@@ -413,6 +428,8 @@
         updateVRMBlink(dt);
         updateVRMVisemes(dt);
         updateVRMIdleMicro(dt);
+        // Idle animation system — runs when idle and idleAnimEnabled is true.
+        if (currentMode === 'idle') updateIdleAnimation(dt);
         updateWindowMove(dt);
 
         // VRM needs to be updated each frame for expressions to apply
@@ -509,6 +526,9 @@
     function updateVRMIdleMicro(dt) {
       if (currentMode !== 'idle') return;
       if (!vrm?.scene) return;
+      // If a procedural idle animation is playing, skip the default micro-movement
+      // so the two don't fight each other.
+      if (idleAnimEnabled && idleAnimState === 'playing') return;
 
       const t = idleTime;
       // Subtle breathing (layered on top of the fixed root height)
@@ -526,6 +546,285 @@
       // This tiny 'aa' viseme (4-5% weight) is enough to show the mouth
       // geometry without looking like the avatar is talking.
       visemeTargets['aa'] = 0.04 + Math.sin(t * 1.4) * 0.01;
+    }
+
+    // ─── VRM: Idle Animation System ─────────────────────────
+    // 12 procedural animations that play randomly when the avatar is idle.
+    //
+    // Key design decision: animations are authored relative to the normalized
+    // bone rest pose (identity = T-pose, arms horizontal).  startIdleAnimation()
+    // resets all bones to identity before playing, so each animation frame knows
+    // its exact starting point.  stopIdleAnimation() restores the natural standing
+    // pose (arms down, fingers curled) via setArmPose().
+
+    // Helper: get a bone node safely, returning null if missing.
+    function getBone(name) {
+      if (!vrm?.humanoid) return null;
+      return vrm.humanoid.getNormalizedBoneNode(name);
+    }
+
+    // Helper: reset the pose bones to their normalized rest (identity = T-pose).
+    function resetPoseBones() {
+      for (const name of POSE_BONES) {
+        const b = getBone(name);
+        if (b) b.quaternion.identity();
+      }
+    }
+
+    // Helper: set a bone's rotation from the normalized T-pose baseline.
+    // @pixiv/three-vrm normalizes humanoid bones so their rest rotation is
+    // identity (= T-pose, arms horizontal). So the local quaternion is just
+    // the Euler rotation we want — no rest-pose multiply needed.
+    function setBone(name, rx, ry, rz) {
+      const b = getBone(name);
+      if (!b) return;
+      b.quaternion.setFromEuler(new THREE.Euler(rx, ry, rz, 'YXZ'));
+    }
+
+    // ─── 12 Idle Animations ─────────────────────────────────
+    // Each animation fn(t) writes bone rotations.  t is seconds since the
+    // animation started.  All angles are relative to the normalized T-pose
+    // (identity = arms horizontal), because startIdleAnimation() resets every
+    // bone to identity before playing.  stopIdleAnimation() restores the
+    // natural standing pose (arms down, fingers curled).
+
+    // 0: T-Pose — hold the model's original T-pose (identity).
+    function animTPose(t) {
+      // bones are already identity from startIdleAnimation() reset
+    }
+
+    // 1: Bored — head tilt, one hand on hip, slight slouch.
+    function animBored(t) {
+      setBone('spine', 0.15, 0, 0);
+      setBone('neck', 0, 0, -0.3);
+      setBone('head', 0.1, 0, -0.15 + Math.sin(t * 2.0) * 0.05);
+      // Right hand on hip: raise upper arm out and bend elbow.
+      setBone('rightUpperArm', 0, 0, 0.8);
+      setBone('rightLowerArm', 0, 0, 0.6);
+      setBone('rightHand', 0, 0, 0.3);
+      // Left arm hangs with slight sway.
+      setBone('leftUpperArm', 0, 0, -1.3 + Math.sin(t * 1.2) * 0.04);
+      setBone('leftLowerArm', 0, 0, -0.2);
+      if (vrm.scene) vrm.scene.position.y = AVATAR_Y + Math.sin(t * 0.8) * 0.01;
+    }
+
+    // 2: Cross Jumps — small hops with arms crossing.
+    function animCrossJumps(t) {
+      const jumpHeight = Math.abs(Math.sin(t * 8.0)) * 0.06;
+      if (vrm.scene) vrm.scene.position.y = AVATAR_Y + jumpHeight;
+
+      const cross = Math.sin(t * 4.0) * 0.6;
+      setBone('leftUpperArm', 0, 0, -1.2 + cross);
+      setBone('rightUpperArm', 0, 0, 1.2 - cross);
+      setBone('leftLowerArm', 0, 0, -0.4);
+      setBone('rightLowerArm', 0, 0, 0.4);
+    }
+
+    // 3: Fight Idle — boxer stance, weight shifting side to side.
+    function animFightIdle(t) {
+      setBone('spine', 0.2, 0, 0);
+      setBone('head', 0.15, 0, 0);
+      // Fists up in guard.
+      setBone('leftUpperArm', 0, 0, -1.0);
+      setBone('leftLowerArm', 0, 0, -0.8);
+      setBone('leftHand', 0, 0, 0.2);
+      setBone('rightUpperArm', 0, 0, 1.0);
+      setBone('rightLowerArm', 0, 0, 0.8);
+      setBone('rightHand', 0, 0, -0.2);
+      // Weight shift.
+      const shift = Math.sin(t * 2.5) * 0.04;
+      if (vrm.scene) {
+        vrm.scene.position.x = shift;
+        vrm.scene.rotation.z = shift * 0.5;
+      }
+    }
+
+    // 4: Jumping Rope — wrists circle, small regular hops.
+    function animJumpingRope(t) {
+      // Arms out to sides, elbows bent.
+      setBone('leftUpperArm', 0, 0.3, -0.9);
+      setBone('leftLowerArm', 0, 0, -0.5);
+      setBone('rightUpperArm', 0, -0.3, 0.9);
+      setBone('rightLowerArm', 0, 0, 0.5);
+      // Wrist circles.
+      const wristAngle = t * 12.0;
+      setBone('leftHand', 0, Math.sin(wristAngle) * 0.5, Math.cos(wristAngle) * 0.5);
+      setBone('rightHand', 0, Math.sin(wristAngle) * 0.5, -Math.cos(wristAngle) * 0.5);
+      // Regular hops.
+      if (vrm.scene) vrm.scene.position.y = AVATAR_Y + Math.abs(Math.sin(t * 7.0)) * 0.04;
+    }
+
+    // 5: Looking — head turns to one side, body leans slightly.
+    function animLooking(t) {
+      setBone('head', 0, 0.6 + Math.sin(t * 1.5) * 0.05, 0.1);
+      setBone('neck', 0, 0.3, 0);
+      setBone('chest', 0, 0.15, 0);
+      if (vrm.scene) vrm.scene.rotation.z = 0.02;
+    }
+
+    // 6: Looking Around — head sweeps left and right slowly.
+    function animLookingAround(t) {
+      const sweep = Math.sin(t * 0.8) * 0.7;
+      setBone('head', 0, sweep, 0);
+      setBone('neck', 0, sweep * 0.5, 0);
+    }
+
+    // 7: Magic Spell Casting — one hand raised, drawing circles in the air.
+    function animMagicSpellCasting(t) {
+      setBone('spine', -0.1, 0, 0);
+      setBone('head', -0.05, 0, 0);
+      // Right arm raised forward.
+      setBone('rightUpperArm', -0.6, 0, 0.8);
+      setBone('rightLowerArm', 0, 0, 0.4);
+      // Right hand draws circles.
+      const circleAngle = t * 3.0;
+      setBone('rightHand', Math.sin(circleAngle) * 0.3, Math.cos(circleAngle) * 0.3, 0);
+      // Left arm slightly out for balance.
+      setBone('leftUpperArm', 0, 0, -0.5);
+      setBone('leftLowerArm', 0, 0, -0.3);
+    }
+
+    // 8: Offensive Idle — aggressive stance, weight shifting, fists up.
+    function animOffensiveIdle(t) {
+      setBone('spine', 0.25, 0, 0);
+      setBone('chest', 0.1, 0, 0);
+      setBone('head', 0.2, 0, 0);
+      setBone('leftUpperArm', -0.3, 0, -0.5);
+      setBone('leftLowerArm', 0, 0, -0.6);
+      setBone('leftHand', 0, 0, 0.1);
+      setBone('rightUpperArm', -0.3, 0, 0.5);
+      setBone('rightLowerArm', 0, 0, 0.6);
+      setBone('rightHand', 0, 0, -0.1);
+      const shift = Math.sin(t * 3.5) * 0.05;
+      if (vrm.scene) {
+        vrm.scene.position.x = shift;
+        vrm.scene.rotation.z = shift * 0.6;
+        vrm.scene.position.y = AVATAR_Y + Math.abs(Math.sin(t * 3.5 + 0.5)) * 0.015;
+      }
+    }
+
+    // 9: Searching Files High — both arms raised, hands shuffling overhead.
+    function animSearchingFilesHigh(t) {
+      setBone('head', -0.3, 0, 0);
+      setBone('spine', -0.15, 0, 0);
+      setBone('leftUpperArm', -1.4, 0, -0.8);
+      setBone('leftLowerArm', 0, 0, -0.3);
+      setBone('rightUpperArm', -1.4, 0, 0.8);
+      setBone('rightLowerArm', 0, 0, 0.3);
+      const shuffle = Math.sin(t * 4.0) * 0.3;
+      setBone('leftHand', 0, shuffle, 0);
+      setBone('rightHand', 0, -shuffle, 0);
+    }
+
+    // 10: Standing Magic Attack — one hand thrust forward, body leans into it.
+    function animStandingMagicAttack(t) {
+      setBone('spine', 0.2, 0, 0);
+      setBone('chest', 0.1, 0, 0);
+      setBone('head', 0.1, 0, 0);
+      const thrust = Math.sin(t * 3.5) * 0.3;
+      setBone('rightUpperArm', -0.5 + thrust * 0.2, 0, 0.6);
+      setBone('rightLowerArm', 0, 0, 0.2);
+      setBone('rightHand', 0, 0, Math.sin(t * 3.5) * 0.3);
+      setBone('leftUpperArm', 0, 0, -0.5);
+      setBone('leftLowerArm', 0, 0, -0.4);
+      if (vrm.scene) {
+        vrm.scene.position.y = AVATAR_Y + Math.abs(Math.sin(t * 3.5)) * 0.02;
+        vrm.scene.rotation.x = Math.sin(t * 3.5) * 0.03;
+      }
+    }
+
+    // 11: Texting While Standing — head down looking at phone, thumbs moving.
+    function animTextingWhileStanding(t) {
+      setBone('head', 0.5, 0, 0);
+      setBone('neck', 0.25, 0, 0);
+      setBone('spine', 0.2, 0, 0);
+      setBone('leftUpperArm', 0.5, 0, -0.6);
+      setBone('leftLowerArm', 0, 0, -0.7);
+      setBone('rightUpperArm', 0.5, 0, 0.6);
+      setBone('rightLowerArm', 0, 0, 0.7);
+      setBone('leftHand', 0, Math.sin(t * 6.0) * 0.4, 0);
+      setBone('rightHand', 0, Math.cos(t * 5.5) * 0.4, 0);
+    }
+
+    // Animation registry: name → function(t, dt)
+    const idleAnimations = [
+      { name: 'T-Pose',                fn: animTPose,                duration: 3.5 },
+      { name: 'Bored',                 fn: animBored,                duration: 5.0 },
+      { name: 'Cross Jumps',           fn: animCrossJumps,           duration: 4.0 },
+      { name: 'Fight Idle',            fn: animFightIdle,            duration: 4.5 },
+      { name: 'Jumping Rope',          fn: animJumpingRope,          duration: 4.0 },
+      { name: 'Looking',               fn: animLooking,              duration: 3.5 },
+      { name: 'Looking Around',        fn: animLookingAround,        duration: 4.0 },
+      { name: 'Magic Spell Casting',   fn: animMagicSpellCasting,    duration: 5.0 },
+      { name: 'Offensive Idle',        fn: animOffensiveIdle,        duration: 4.5 },
+      { name: 'Searching Files High',  fn: animSearchingFilesHigh,   duration: 4.5 },
+      { name: 'Standing Magic Attack', fn: animStandingMagicAttack,  duration: 4.0 },
+      { name: 'Texting While Standing',fn: animTextingWhileStanding,  duration: 5.0 },
+    ];
+
+    // Pick a random idle animation (different from the current one).
+    function pickRandomIdleAnimation() {
+      let idx;
+      do {
+        idx = Math.floor(Math.random() * idleAnimations.length);
+      } while (idx === idleAnimIndex && idleAnimations.length > 1);
+      return idx;
+    }
+
+    // Start a new idle animation.
+    function startIdleAnimation() {
+      if (!idleAnimEnabled || !vrm) return;
+      // Reset every pose bone to the normalized T-pose (identity) so the
+      // animation's euler angles are applied from a known baseline.
+      resetPoseBones();
+      idleAnimIndex = pickRandomIdleAnimation();
+      idleAnimDuration = idleAnimations[idleAnimIndex].duration;
+      idleAnimTimer = 0;
+      idleAnimState = 'playing';
+    }
+
+    // Restore the natural standing pose (arms down, fingers curled) and reset
+    // the scene transform left over from micro-movement / animations.  Called
+    // when an idle animation ends and whenever we leave idle mode (start of a
+    // conversation turn).
+    function resetToStandingPose() {
+      setArmPose();
+      if (vrm.scene) {
+        vrm.scene.position.set(0, AVATAR_Y, 0);
+        vrm.scene.rotation.set(0, 0, 0);
+      }
+    }
+
+    // Stop the current idle animation and restore the natural standing pose.
+    function stopIdleAnimation() {
+      if (idleAnimState === 'playing') {
+        resetToStandingPose();
+      }
+      idleAnimState = 'resting';
+      idleAnimTimer = 0;
+      idleAnimIndex = -1;
+      // Pick a random rest duration between 2 and 5 seconds.
+      idleRestDuration = 2.0 + Math.random() * 3.0;
+    }
+
+    // Called every frame when the avatar is idle. Manages the rest/play cycle.
+    function updateIdleAnimation(dt) {
+      if (!idleAnimEnabled || !vrm) return;
+
+      if (idleAnimState === 'resting') {
+        idleAnimTimer += dt;
+        if (idleAnimTimer >= idleRestDuration) {
+          startIdleAnimation();
+        }
+      } else if (idleAnimState === 'playing') {
+        idleAnimTimer += dt;
+        if (idleAnimTimer >= idleAnimDuration) {
+          stopIdleAnimation();
+        } else {
+          const anim = idleAnimations[idleAnimIndex];
+          if (anim) anim.fn(idleAnimTimer);
+        }
+      }
     }
 
     // ─── Placeholder: Blink ─────────────────────────────────
@@ -621,6 +920,15 @@
           currentMode = msg.mode;
           isSpeaking = msg.isSpeaking || false;
           if (msg.emotion) currentEmotion = msg.emotion;
+          if (typeof msg.idleAnimationsEnabled === 'boolean') {
+            idleAnimEnabled = msg.idleAnimationsEnabled;
+          }
+          // Leaving idle: stop any in-progress animation and reset the
+          // standing pose (micro-movement may have left scene transforms).
+          if (currentMode !== 'idle') {
+            stopIdleAnimation();
+            resetToStandingPose();
+          }
           applyModeToVRM();
         }
       } catch (e) {
@@ -729,14 +1037,15 @@
       }
     }
 
-    // All drags move the window (or orbit, when Ctrl is held).
+    // Drag = orbit camera around avatar. Ctrl+drag = move window.
     // { startX, startY, lastX, lastY, moved, isOrbit }
     let dragWindow = null;
 
     document.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return; // left button only
 
-      const isOrbit = keys.ctrl;
+      // Ctrl+drag → move the window. Plain drag → orbit.
+      const isOrbit = !keys.ctrl;
       dragWindow = {
         startX: e.screenX,
         startY: e.screenY,
@@ -749,12 +1058,8 @@
 
     document.addEventListener('mousemove', (e) => {
       if (!dragWindow) {
-        // Hover cursor feedback: grab when over the avatar, or rotate when Ctrl is held.
-        if (keys.ctrl) {
-          canvas.style.cursor = hitAvatar(e) ? 'grab' : 'default';
-        } else {
-          canvas.style.cursor = hitAvatar(e) ? 'grab' : 'default';
-        }
+        // Hover cursor: grab when over the avatar (drag to orbit).
+        canvas.style.cursor = hitAvatar(e) ? 'grab' : 'default';
         return;
       }
 
@@ -771,12 +1076,13 @@
 
       if (dragWindow.moved) {
         if (dragWindow.isOrbit) {
-          // Ctrl+drag: orbit the camera around the avatar.
+          // Plain drag: orbit the camera around the avatar.
           orbitTheta -= dx * orbitSpeed;
           orbitPhi += dy * orbitSpeed;
           // Clamp vertical angle so the camera doesn't flip.
           orbitPhi = Math.max(-1.4, Math.min(1.4, orbitPhi));
         } else if (window.goBridge_moveWindow) {
+          // Ctrl+drag: move the window.
           window.goBridge_moveWindow(dx, dy);
         }
       }
@@ -842,6 +1148,8 @@
 
     // ─── Start ──────────────────────────────────────────────
     initAvatar().then(() => {
+      // Signal to Go that we're ready to receive state messages.
+      sendEvent('ready', {});
       animate();
     });
   </script>

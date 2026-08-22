@@ -56,9 +56,10 @@ const (
 
 // State is the current state of the digital human, consumed by the UI.
 type State struct {
-	Mode         Mode    `json:"mode"`
-	Emotion      Emotion `json:"emotion"`
-	IsSpeaking   bool    `json:"isSpeaking"`
-	LastUserText string  `json:"lastUserText,omitempty"`
-	ResponseText string  `json:"responseText,omitempty"`
+	Mode                   Mode    `json:"mode"`
+	Emotion                Emotion `json:"emotion"`
+	IsSpeaking             bool    `json:"isSpeaking"`
+	LastUserText           string  `json:"lastUserText,omitempty"`
+	ResponseText           string  `json:"responseText,omitempty"`
+	IdleAnimationsEnabled  bool    `json:"idleAnimationsEnabled"`
 }

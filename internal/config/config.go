@@ -15,6 +15,7 @@ type Cfg struct {
 	LLM    LLMConfig    `yaml:"llm"`
 	TTS    TTSConfig    `yaml:"tts"`
 	APIKey string       `yaml:"api_key"`
+	Avatar AvatarConfig `yaml:"avatar"`
 }
 
 // ASRConfig holds the speech recognition configuration.
@@ -39,6 +40,24 @@ type TTSConfig struct {
 	Voice      string `yaml:"voice"`
 	Format     string `yaml:"format"`
 	SampleRate int    `yaml:"sample_rate"`
+}
+
+// AvatarConfig holds the digital human's behavior configuration.
+type AvatarConfig struct {
+	// IdleAnimationsEnabled controls whether the avatar randomly plays
+	// procedural idle animations (e.g. "Bored", "Cross Jumps") while
+	// waiting for interaction. When false, idle only shows breathing and
+	// subtle micro-movement.
+	//
+	// A pointer is used so that an absent key defaults to enabled (true)
+	// rather than Go's zero value (false).
+	IdleAnimationsEnabled *bool `yaml:"idle_animations_enabled"`
+}
+
+// IdleAnimations reports whether idle animations are enabled, defaulting
+// to true when the key is absent from cfg.yml.
+func (a AvatarConfig) IdleAnimations() bool {
+	return a.IdleAnimationsEnabled == nil || *a.IdleAnimationsEnabled
 }
 
 // Load reads cfg.yml from the same directory as the executable.

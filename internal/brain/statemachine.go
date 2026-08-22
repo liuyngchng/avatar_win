@@ -53,11 +53,13 @@ func NewStateMachine(
 	llmClient *llm.Client,
 	audioPlayer *audio.Player,
 	recorder audio.Recorder,
+	idleAnimationsEnabled bool,
 ) *StateMachine {
 	return &StateMachine{
 		state: State{
-			Mode:    ModeIdle,
-			Emotion: EmotionNeutral,
+			Mode:                  ModeIdle,
+			Emotion:               EmotionNeutral,
+			IdleAnimationsEnabled: idleAnimationsEnabled,
 		},
 		stateChanges: make(chan State, 16),
 		events:       make(chan Event, 16),
@@ -94,6 +96,14 @@ func (sm *StateMachine) Visemes() <-chan VisemeEvent {
 // HandleEvent feeds a renderer event into the FSM.
 func (sm *StateMachine) HandleEvent(ev Event) {
 	sm.events <- ev
+}
+
+// Reemit re-sends the current state to the renderer. The FSM emits its
+// initial state before the webview page has necessarily finished loading,
+// so the renderer signals "ready" after load and we re-send here to make
+// sure the frontend receives the initial config (e.g. idle animations flag).
+func (sm *StateMachine) Reemit() {
+	sm.emit()
 }
 
 func (sm *StateMachine) emit() {

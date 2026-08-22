@@ -119,9 +119,16 @@ func main() {
 	log.Println("main: [4/5] audio recorder created OK")
 	defer recorder.Stop()
 
+	// Step 5: Determine idle animation flag.
+	idleAnims := true // default: enabled
+	if cfg != nil {
+		idleAnims = cfg.Avatar.IdleAnimations()
+	}
+	log.Printf("main: idle animations enabled = %v", idleAnims)
+
 	// Step 5: Start the brain (state machine) and event loops.
 	log.Println("main: [5/5] starting brain state machine...")
-	sm := brain.NewStateMachine(ttsClient, asrClient, llmClient, player, recorder)
+	sm := brain.NewStateMachine(ttsClient, asrClient, llmClient, player, recorder, idleAnims)
 
 	// Start the FSM loop.
 	go sm.Run()
@@ -129,6 +136,13 @@ func main() {
 	// Handle incoming events from the renderer (user taps, etc.).
 	go func() {
 		for msg := range r.Events() {
+			// "ready" means the webview page has finished loading and is
+			// ready to receive state. Re-send the current state so the
+			// frontend gets the initial config (e.g. idle animations flag).
+			if msg.Type == "ready" {
+				sm.Reemit()
+				continue
+			}
 			sm.HandleEvent(msg)
 		}
 	}()

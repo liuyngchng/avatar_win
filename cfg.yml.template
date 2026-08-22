@@ -31,3 +31,9 @@ tts:
 
 # 百炼 API Key（从 https://bailian.console.aliyun.com 获取）
 api_key: ""
+
+# 数字人行为配置
+avatar:
+  # idle 时是否随机播放动作动画（T-Pose/Bored/Cross Jumps 等 12 种）
+  # 关闭后 idle 时仅保留呼吸 + 微动，不播放动作
+  idle_animations_enabled: true
