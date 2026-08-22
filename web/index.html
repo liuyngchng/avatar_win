@@ -48,7 +48,7 @@
     // VRM1 uses: aa, ih, ou, ee, oh (not A/I/U/E/O)
     let visemeTargets = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
     let visemeCurrent = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
-    let visemeBlendSpeed = 8.0; // how fast visemes transition
+    let visemeBlendSpeed = 30.0; // how fast visemes transition (snappy)
 
     // Blink state
     let blinkTimer = 0;
@@ -586,8 +586,11 @@
         vrm.expressionManager.setValue(p, 0);
       }
 
-      // Apply emotion
-      if (currentEmotion !== 'neutral' && presets.includes(currentEmotion)) {
+      // Apply emotion — but only when NOT speaking. The 'happy' (and most
+      // other emotion) presets set overrideMouth='blend', which at weight 1.0
+      // locks the mouth into the emotion's shape and blocks viseme lip-sync.
+      // While speaking we keep emotion at 0 so the mouth follows the visemes.
+      if (!isSpeaking && currentEmotion !== 'neutral' && presets.includes(currentEmotion)) {
         vrm.expressionManager.setValue(currentEmotion, 1.0);
       }
 

@@ -247,7 +247,6 @@ func (sm *StateMachine) pipeline(gen int64) {
 	// Collect all synthesized audio and sentences.
 	var allSamples []float32
 	var allSentences []string
-	sampleRate := 24000 // TTS output sample rate; set from first result
 	tTTSStart := time.Now() // ⏱ TTS overall start (first synthesis)
 	tLLMFirstToken := time.Time{}
 	tLLMLastToken := time.Time{}
@@ -272,7 +271,6 @@ func (sm *StateMachine) pipeline(gen int64) {
 				ttsErrs <- err
 				return
 			}
-			sampleRate = result.SampleRate
 			allSamples = append(allSamples, result.Samples...)
 			allSentences = append(allSentences, sentence)
 		}
@@ -372,13 +370,9 @@ func (sm *StateMachine) pipeline(gen int64) {
 		log.Printf("⏱ [timing] LLM: stream_done=%dms (total elapsed: %dms)", tLLMEnd.Sub(tLLMStart).Milliseconds(), tLLMEnd.Sub(t0).Milliseconds())
 	}
 
-	// 4. Generate viseme timeline.
-	audioDur := time.Duration(float64(len(allSamples)) / float64(sampleRate) * float64(time.Second))
-	timeline := GenerateVisemeTimeline(replyText, audioDur)
-	log.Printf("state: viseme timeline: %d entries, total audio %.1fs (gen=%d)", len(timeline), audioDur.Seconds(), gen)
 	log.Printf("⏱ [timing] TTS: %dms (overlap with LLM, total elapsed: %dms)", tTTSEnd.Sub(tTTSStart).Milliseconds(), tTTSEnd.Sub(t0).Milliseconds())
 
-	// 5. Speak.
+	// 4. Speak — drive mouth visemes on a fixed rhythm while audio plays.
 	if sm.audioPlayer == nil {
 		log.Printf("state: audio player is nil, skipping playback")
 		sm.mu.Lock()
@@ -407,9 +401,9 @@ func (sm *StateMachine) pipeline(gen int64) {
 		return
 	}
 
-	// Drive viseme timeline while audio plays. The loop also checks for
-	// cancellation so the user can interrupt the avatar mid-speech.
-	sm.speakWithCancel(player, timeline, cancel)
+	// Cycle visemes on a fixed rhythm while audio plays. The loop also
+	// checks for cancellation so the user can interrupt mid-speech.
+	sm.speakWithCancel(player, cancel)
 	tPlayEnd := time.Now() // ⏱ playback end
 
 	// Reset viseme to rest.
@@ -453,14 +447,34 @@ func sentenceEndIndex(s string) int {
 	return 0
 }
 
-// speakWithCancel drives viseme timeline while audio plays. If the cancel
-// channel is closed, the audio is stopped immediately.
-func (sm *StateMachine) speakWithCancel(player *oto.Player, timeline []VisemeTimelineEntry, cancel <-chan struct{}) {
-	startTime := time.Now()
-	timelineIdx := 0
+// speakWithCancel cycles through a fixed viseme sequence while audio plays,
+// giving the mouth a natural "talking" look without trying to match specific
+// phonemes. If the cancel channel is closed, audio stops immediately.
+//
+// The cycle is: aa → ih → ou → ee → oh → rest → aa → ...
+// Each shape is held for ~120ms then the mouth briefly closes (rest) before
+// the next shape. This produces a rhythmic open/close that looks like talking.
+func (sm *StateMachine) speakWithCancel(player *oto.Player, cancel <-chan struct{}) {
+	// Viseme cycle — loop through these shapes while speaking.
+	cycle := []VisemeName{VisemeA, VisemeI, VisemeU, VisemeE, VisemeO}
+	cycleIdx := 0
+	openMs := 120  // how long each open-mouth shape lasts
+	closeMs := 60  // how long the mouth stays closed between shapes
+
+	send := func(v VisemeName, w float64) {
+		select {
+		case sm.visemes <- VisemeEvent{Type: "viseme", Viseme: v, Weight: w}:
+		default:
+		}
+	}
+
+	// Start with the mouth open immediately.
+	send(cycle[cycleIdx], 1.0)
+	cycleIdx = (cycleIdx + 1) % len(cycle)
+	phaseIsOpen := true
+	phaseStart := time.Now()
 
 	for player.IsPlaying() {
-		// Check for cancellation.
 		select {
 		case <-cancel:
 			log.Printf("state: playback interrupted by user")
@@ -474,20 +488,23 @@ func (sm *StateMachine) speakWithCancel(player *oto.Player, timeline []VisemeTim
 			return
 		}
 
-		elapsed := time.Since(startTime).Milliseconds()
+		elapsed := time.Since(phaseStart).Milliseconds()
 
-		for timelineIdx < len(timeline) && int64(timeline[timelineIdx].StartMs) <= elapsed {
-			entry := timeline[timelineIdx]
-			ev := VisemeEvent{
-				Type:   "viseme",
-				Viseme: entry.Viseme,
-				Weight: 1.0,
+		if phaseIsOpen {
+			if elapsed >= int64(openMs) {
+				// Mouth was open — now close it.
+				send(VisemeRest, 0)
+				phaseIsOpen = false
+				phaseStart = time.Now()
 			}
-			select {
-			case sm.visemes <- ev:
-			default:
+		} else {
+			if elapsed >= int64(closeMs) {
+				// Mouth was closed — open with next shape.
+				send(cycle[cycleIdx], 1.0)
+				cycleIdx = (cycleIdx + 1) % len(cycle)
+				phaseIsOpen = true
+				phaseStart = time.Now()
 			}
-			timelineIdx++
 		}
 
 		time.Sleep(10 * time.Millisecond)

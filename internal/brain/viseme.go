@@ -165,7 +165,14 @@ func GenerateVisemeTimeline(text string, audioDuration time.Duration) []VisemeTi
 	hanziSlotMs := float64(totalMs) / effectiveSlots
 	punctuationSlotMs := hanziSlotMs / 3.0
 
-	entries := make([]VisemeTimelineEntry, 0, len(chars))
+	// openRatio controls how much of each syllable's slot the mouth stays
+	// open vs. closed. Real speech closes the mouth briefly between
+	// syllables, so we emit a short "rest" frame after every hanzi to make
+	// the mouth open/close rhythmically instead of staying open the whole
+	// time.
+	const openRatio = 0.62
+
+	entries := make([]VisemeTimelineEntry, 0, len(chars)*2)
 	currentMs := 0.0
 
 	for _, c := range chars {
@@ -181,17 +188,46 @@ func GenerateVisemeTimeline(text string, audioDuration time.Duration) []VisemeTi
 		}
 
 		startMs := int(currentMs)
-		durationMs := int(slotMs)
-		if durationMs < 30 {
-			durationMs = 30 // minimum 30ms per slot
+
+		if unicode.Is(unicode.Han, c) {
+			// Open-mouth viseme for the first part of the slot.
+			openMs := slotMs * openRatio
+			if openMs < 30 {
+				openMs = 30
+			}
+			entries = append(entries, VisemeTimelineEntry{
+				Char:       string(c),
+				Viseme:     viseme,
+				StartMs:    startMs,
+				DurationMs: int(openMs),
+			})
+
+			// Close-mouth (rest) for the remainder, so the mouth shuts
+			// before the next syllable begins.
+			closeMs := slotMs - openMs
+			if closeMs < 20 {
+				closeMs = 20
+			}
+			entries = append(entries, VisemeTimelineEntry{
+				Char:       string(c),
+				Viseme:     VisemeRest,
+				StartMs:    startMs + int(openMs),
+				DurationMs: int(closeMs),
+			})
+		} else {
+			// Punctuation: keep the mouth closed for the (short) slot.
+			durationMs := int(slotMs)
+			if durationMs < 30 {
+				durationMs = 30
+			}
+			entries = append(entries, VisemeTimelineEntry{
+				Char:       string(c),
+				Viseme:     VisemeRest,
+				StartMs:    startMs,
+				DurationMs: durationMs,
+			})
 		}
 
-		entries = append(entries, VisemeTimelineEntry{
-			Char:       string(c),
-			Viseme:     viseme,
-			StartMs:    startMs,
-			DurationMs: durationMs,
-		})
 		currentMs += slotMs
 	}
 
