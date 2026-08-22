@@ -749,15 +749,6 @@
     function startIdleAnimation() {
       if (!idleAnimEnabled || !idleMixer || idleClipNames.length === 0) return;
 
-      // Reset humanoid bones to the normalized rest pose (T-pose) so the
-      // retargeted animation starts from the same baseline it was authored on.
-      vrm.humanoid.resetNormalizedPose();
-
-      // Stop any previously playing action.
-      if (idleCurrentAction) {
-        idleCurrentAction.fadeOut(0.3);
-      }
-
       idleAnimIndex = pickRandomIdleClip();
       const name = idleClipNames[idleAnimIndex];
       const clip = idleClips[name];
@@ -766,7 +757,10 @@
       idleCurrentAction = idleMixer.clipAction(clip);
       idleCurrentAction.loop = THREE.LoopOnce;
       idleCurrentAction.clampWhenFinished = true;
-      idleCurrentAction.fadeIn(0.3);
+      // Blend from the current standing pose (arms down) into the new
+      // animation.  We do NOT reset to T-pose first — that would cause a
+      // visible snap every time an animation starts.
+      idleCurrentAction.fadeIn(1.0);
       idleCurrentAction.play();
 
       idleAnimState = 'playing';
@@ -782,12 +776,25 @@
     }
 
     // Stop the current idle animation and restore the standing pose.
-    function stopIdleAnimation() {
+    // When immediate is true (e.g. leaving idle mode), stop() is used to
+    // cut the animation instantly; the caller is responsible for setting
+    // the standing pose via resetToStandingPose().
+    // When immediate is false (normal clip end), fadeOut() blends the
+    // bones back to the pre-action state (standing pose) automatically.
+    function stopIdleAnimation(immediate) {
       if (idleCurrentAction) {
-        idleCurrentAction.fadeOut(0.3);
+        if (immediate) {
+          idleCurrentAction.stop();
+        } else {
+          idleCurrentAction.fadeOut(1.0);
+        }
         idleCurrentAction = null;
       }
-      resetToStandingPose();
+      // Reset the scene transform (the animation may have shifted the root).
+      if (vrm.scene) {
+        vrm.scene.position.set(0, AVATAR_Y, 0);
+        vrm.scene.rotation.set(0, 0, 0);
+      }
       idleAnimState = 'resting';
       idleRestTimer = 0;
       idleAnimIndex = -1;
@@ -911,7 +918,7 @@
           // Leaving idle: stop any in-progress animation and reset the
           // standing pose (micro-movement may have left scene transforms).
           if (currentMode !== 'idle') {
-            stopIdleAnimation();
+            stopIdleAnimation(true);
             resetToStandingPose();
           }
           applyModeToVRM();
