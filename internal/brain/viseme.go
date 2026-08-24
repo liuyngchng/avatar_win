@@ -139,6 +139,11 @@ type VisemeTimelineEntry struct {
 // GenerateVisemeTimeline creates a viseme timeline from text and audio duration.
 // Uses the "even distribution" approach (方案A): total duration ÷ number of
 // Chinese characters, with punctuation getting shorter pauses.
+//
+// TODO: Currently unused — the actual lip-sync in speakWithCancel uses a fixed
+// viseme cycle (aa→ih→ou→ee→oh→rest). This function should be wired into the
+// pipeline once TTS provides per-character timestamps so we can drive real
+// phoneme-synced mouth shapes instead of the current rhythm-based approach.
 func GenerateVisemeTimeline(text string, audioDuration time.Duration) []VisemeTimelineEntry {
 	chars := []rune(text)
 	if len(chars) == 0 {

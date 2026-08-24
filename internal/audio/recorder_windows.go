@@ -66,11 +66,46 @@ func (r *windowsRecorder) captureLoop() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
+	// Retry loop: if the WASAPI capture fails (device unplugged, etc.),
+	// close the subscriber channel, wait a bit, and reinitialize.
+	for {
+		select {
+		case <-r.stopCh:
+			return
+		default:
+		}
+
+		err := r.runCaptureOnce()
+		if err != nil {
+			log.Printf("audio: capture error: %v, will retry in 2s", err)
+		}
+
+		// Close the current subscriber channel so consumers know to
+		// re-subscribe via Start() next time.
+		r.mu.Lock()
+		if r.ch != nil {
+			close(r.ch)
+			r.ch = nil
+		}
+		r.mu.Unlock()
+
+		select {
+		case <-r.stopCh:
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// runCaptureOnce initializes WASAPI and runs the capture loop. It returns
+// when the capture fails (device error, etc.) or when Stop() is called.
+func (r *windowsRecorder) runCaptureOnce() error {
+
 	// --- Initialize COM once ---
 	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err != nil {
 		if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
 			log.Printf("audio: CoInitializeEx: %v", err)
-			return
+			return err
 		}
 	}
 	defer ole.CoUninitialize()
@@ -80,14 +115,14 @@ func (r *windowsRecorder) captureLoop() {
 	if err := wca.CoCreateInstance(wca.CLSID_MMDeviceEnumerator, 0, wca.CLSCTX_ALL,
 		wca.IID_IMMDeviceEnumerator, &mmde); err != nil {
 		log.Printf("audio: CoCreateInstance(MMDeviceEnumerator): %v", err)
-		return
+		return err
 	}
 	defer mmde.Release()
 
 	var mmd *wca.IMMDevice
 	if err := mmde.GetDefaultAudioEndpoint(wca.ECapture, wca.EConsole, &mmd); err != nil {
 		log.Printf("audio: GetDefaultAudioEndpoint(capture): %v", err)
-		return
+		return err
 	}
 	defer mmd.Release()
 
@@ -95,7 +130,7 @@ func (r *windowsRecorder) captureLoop() {
 	var ac *wca.IAudioClient
 	if err := mmd.Activate(wca.IID_IAudioClient, wca.CLSCTX_ALL, nil, &ac); err != nil {
 		log.Printf("audio: Activate(IAudioClient): %v", err)
-		return
+		return err
 	}
 	defer ac.Release()
 
@@ -103,7 +138,7 @@ func (r *windowsRecorder) captureLoop() {
 	var mixFormat *wca.WAVEFORMATEX
 	if err := ac.GetMixFormat(&mixFormat); err != nil {
 		log.Printf("audio: GetMixFormat: %v", err)
-		return
+		return err
 	}
 	defer ole.CoTaskMemFree(uintptr(unsafe.Pointer(mixFormat)))
 	log.Printf("audio: capture device mix format: tag=%d, channels=%d, rate=%d, bits=%d",
@@ -128,26 +163,26 @@ func (r *windowsRecorder) captureLoop() {
 		if err := ac.Initialize(wca.AUDCLNT_SHAREMODE_SHARED, streamFlags,
 			recorderBufferDuration, 0, requestedFormat, nil); err != nil {
 			log.Printf("audio: Initialize: %v", err)
-			return
+			return err
 		}
 	}
 
 	var bufferFrameSize uint32
 	if err := ac.GetBufferSize(&bufferFrameSize); err != nil {
 		log.Printf("audio: GetBufferSize: %v", err)
-		return
+		return err
 	}
 
 	var acc *wca.IAudioCaptureClient
 	if err := ac.GetService(wca.IID_IAudioCaptureClient, &acc); err != nil {
 		log.Printf("audio: GetService(IAudioCaptureClient): %v", err)
-		return
+		return err
 	}
 	defer acc.Release()
 
 	if err := ac.Start(); err != nil {
 		log.Printf("audio: Start: %v", err)
-		return
+		return err
 	}
 	defer ac.Stop()
 
@@ -159,7 +194,7 @@ func (r *windowsRecorder) captureLoop() {
 		select {
 		case <-r.stopCh:
 			log.Printf("audio: recording stopped (shutdown)")
-			return
+			return nil
 		default:
 		}
 
@@ -169,7 +204,7 @@ func (r *windowsRecorder) captureLoop() {
 			var packetSize uint32
 			if err := acc.GetNextPacketSize(&packetSize); err != nil {
 				log.Printf("audio: GetNextPacketSize: %v", err)
-				return
+				return err
 			}
 			if packetSize == 0 {
 				break
@@ -180,7 +215,7 @@ func (r *windowsRecorder) captureLoop() {
 			var flags uint32
 			if err := acc.GetBuffer(&data, &framesToRead, &flags, nil, nil); err != nil {
 				log.Printf("audio: GetBuffer: %v", err)
-				return
+				return err
 			}
 
 			if flags&wca.AUDCLNT_BUFFERFLAGS_SILENT == 0 && data != nil && framesToRead > 0 {

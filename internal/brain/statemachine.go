@@ -301,7 +301,7 @@ func (sm *StateMachine) pipeline(gen int64) {
 				if !llmFirstTokenSet {
 					tLLMLastToken = time.Now()
 				}
-				break
+				continue
 			}
 			if !llmFirstTokenSet {
 				tLLMFirstToken = time.Now()
@@ -324,6 +324,9 @@ func (sm *StateMachine) pipeline(gen int64) {
 		case <-cancel:
 			close(sentenceCh)
 			<-ttsDone
+			// Drain the remaining LLM tokens so the ChatStream goroutine
+			// can exit cleanly instead of being blocked on the channel.
+			go drainLLMStream(llmCh)
 			log.Printf("state: canceled during LLM (gen=%d)", gen)
 			return
 		}
@@ -463,6 +466,11 @@ func sentenceEndIndex(s string) int {
 // giving the mouth a natural "talking" look without trying to match specific
 // phonemes. If the cancel channel is closed, audio stops immediately.
 //
+// TODO: Replace this fixed viseme cycle with phoneme-synced mouth shapes.
+// The viseme.go already has GetViseme() and GenerateVisemeTimeline() for
+// pinyin→viseme mapping. The blocker is that TTS does not return per-character
+// timestamps. Once that's available, switch to GenerateVisemeTimeline().
+//
 // The cycle is: aa → ih → ou → ee → oh → rest → aa → ...
 // Each shape is held for ~120ms then the mouth briefly closes (rest) before
 // the next shape. This produces a rhythmic open/close that looks like talking.
@@ -600,6 +608,15 @@ func rmsOf(samples []float32) float64 {
 		sum += float64(s) * float64(s)
 	}
 	return math.Sqrt(sum / float64(len(samples)))
+}
+
+// drainLLMStream reads and discards all remaining tokens from the LLM
+// stream channel. This prevents the ChatStream goroutine from being
+// blocked forever when the pipeline is cancelled and nobody is reading
+// from llmCh anymore.
+func drainLLMStream(ch <-chan string) {
+	for range ch {
+	}
 }
 
 // trimSpace is a small helper to trim surrounding whitespace from a string.

@@ -18,7 +18,9 @@
 package asr
 
 import (
+	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -306,7 +308,13 @@ func float32ToPCM(samples []float32) []byte {
 	return buf
 }
 
-// generateID creates a short random hex ID for task identification.
+// generateID creates a random 16-byte hex ID for task identification.
+// crypto/rand guarantees uniqueness even across concurrent calls.
 func generateID() string {
-	return fmt.Sprintf("%016x", time.Now().UnixNano())
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Fallback to timestamp on entropy failure (extremely unlikely).
+		return fmt.Sprintf("%016x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
 }

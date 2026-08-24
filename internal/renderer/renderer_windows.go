@@ -135,7 +135,16 @@ func (r *webviewRenderer) SendMessage(msg any) {
 		log.Printf("renderer: marshal error: %v", err)
 		return
 	}
-	js := "if(window.handleMessage)handleMessage(" + strconv.Quote(string(data)) + ")"
+	// Embed the JSON as a JS string literal. json.Marshal of a string
+	// produces a quoted, escaped literal whose escaping (including U+2028/U+2029)
+	// is a valid subset of JavaScript string escaping, unlike strconv.Quote
+	// which emits Go-specific escapes (e.g. \a, \v) that JS does not understand.
+	arg, err := json.Marshal(string(data))
+	if err != nil {
+		log.Printf("renderer: marshal arg error: %v", err)
+		return
+	}
+	js := "if(window.handleMessage)handleMessage(" + string(arg) + ")"
 	// Eval must be called on the main UI thread (WebView2 requirement).
 	// Dispatch marshals the call onto the thread that owns the message pump.
 	r.webview.Dispatch(func() {

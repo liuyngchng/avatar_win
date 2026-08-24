@@ -83,6 +83,10 @@ type streamChunk struct {
 }
 
 // Chat sends a single user message and returns the assistant's reply.
+//
+// TODO: This non-streaming method is currently unused. The state machine
+// uses ChatStream exclusively. Kept for future use cases where a simple
+// non-streaming API call is needed (e.g. one-shot classification).
 func (c *Client) Chat(userText string) (string, error) {
 	messages := []chatMessage{
 		{Role: "system", Content: c.system},

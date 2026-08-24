@@ -13,11 +13,11 @@ import (
 // same directory as the executable. Returns the opened file so the caller
 // can close it on exit.
 func Init() (*os.File, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		wd = "."
+	dir := "."
+	if exe, err := os.Executable(); err == nil {
+		dir = filepath.Dir(exe)
 	}
-	path := filepath.Join(wd, "avatar.log")
+	path := filepath.Join(dir, "avatar.log")
 
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
