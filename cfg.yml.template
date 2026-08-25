@@ -1,6 +1,10 @@
 # Avatar Desktop — 数字人 API 配置
 # 将此文件放在 avatar.exe 同目录下，启动时自动读取。
 #
+# 在线版（默认构建）：需要配置 asr / tts / llm 的 API 地址和 api_key。
+# 离线版（-tags offline 构建）：ASR/TTS 使用本地模型，asr/tts 配置忽略，
+#   LLM 仍然需要配置 api_key。
+#
 # 接入阿里云百炼 DashScope 实时 WebSocket API：
 #   ASR: Qwen-Audio-3.0-ASR-Flash-Streaming (WebSocket run-task 协议)
 #   TTS: Qwen3-TTS-Flash-Realtime (WebSocket realtime 协议)

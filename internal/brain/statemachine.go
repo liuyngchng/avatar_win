@@ -34,8 +34,8 @@ type StateMachine struct {
 	stateChanges chan State
 	events       chan Event
 	visemes      chan VisemeEvent
-	ttsClient    *tts.Client
-	asrClient    *asr.Client
+	ttsClient    tts.Synthesizer
+	asrClient    asr.Transcriber
 	llmClient    *llm.Client
 	audioPlayer  *audio.Player
 	recorder     audio.Recorder
@@ -48,8 +48,8 @@ type StateMachine struct {
 
 // NewStateMachine creates a state machine in ModeIdle.
 func NewStateMachine(
-	ttsClient *tts.Client,
-	asrClient *asr.Client,
+	ttsClient tts.Synthesizer,
+	asrClient asr.Transcriber,
 	llmClient *llm.Client,
 	audioPlayer *audio.Player,
 	recorder audio.Recorder,

@@ -138,13 +138,6 @@ func (c *Client) closeLocked() {
 	}
 }
 
-// SynthesizeResult contains the result of a TTS synthesis.
-type SynthesizeResult struct {
-	Samples    []float32
-	SampleRate int
-	Duration   float64
-}
-
 // Synthesize converts text to speech via the Qwen-TTS Realtime WebSocket API.
 // The WebSocket connection is reused across calls; only the first call pays
 // the TLS+WS handshake cost.

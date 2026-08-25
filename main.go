@@ -72,27 +72,41 @@ func main() {
 	defer r.Close()
 	log.Println("main: [2/5] renderer window created OK")
 
-	// Step 3: Initialize online clients (Alibaba Cloud Bailian APIs).
-	// These are network-dependent — if cfg is nil (no cfg.yml), we skip
-	// them entirely and the avatar will only display, not talk.
-	var asrClient *asr.Client
+	// Step 3: Initialize ASR, LLM, TTS clients.
+	//   - ASR and TTS are created by asr.Init/tts.Init, which are selected
+	//     at build time: online (DashScope API) by default, or offline
+	//     (local sherpa-onnx model) with -tags offline.
+	//   - LLM is always online and reads cfg.yml.
+	//   - If cfg is nil (no cfg.yml), we skip entirely and the avatar will
+	//     only display, not talk.
+	var asrClient asr.Transcriber
 	var llmClient *llm.Client
-	var ttsClient *tts.Client
+	var ttsClient tts.Synthesizer
 
 	if cfg != nil {
-		log.Println("main: [3/5] initializing API clients...")
-		asrClient = asr.NewClient(cfg.ASR.URL, cfg.ASR.Model, cfg.APIKey, cfg.ASR.Format, cfg.ASR.SampleRate)
+		log.Println("main: [3/5] initializing clients...")
+
+		// ── ASR ────────────────────────────────────
+		asrClient, err = asr.Init(cfg)
+		if err != nil {
+			log.Fatalf("main: ASR init failed: %v", err)
+		}
 		defer asrClient.Close()
 
+		// ── LLM (always online) ───────────────────
+		if cfg.LLM.URL == "" {
+			log.Fatalf("main: LLM init failed: cfg.yml llm.url is required")
+		}
 		llmClient = llm.NewClient(cfg.LLM.URL, cfg.LLM.Model, cfg.APIKey, cfg.LLM.Name, cfg.LLM.MaxTokens)
 		defer llmClient.Close()
-
-		ttsClient = tts.NewClient(cfg.TTS.URL, cfg.TTS.Model, cfg.TTS.Voice, cfg.APIKey, cfg.TTS.Format, cfg.TTS.SampleRate)
-		defer ttsClient.Close()
-
-		log.Printf("main: [3/5] ASR endpoint=%s (model=%s)", cfg.ASR.URL, cfg.ASR.Model)
 		log.Printf("main: [3/5] LLM endpoint=%s (model=%s)", cfg.LLM.URL, cfg.LLM.Model)
-		log.Printf("main: [3/5] TTS endpoint=%s (model=%s, voice=%s)", cfg.TTS.URL, cfg.TTS.Model, cfg.TTS.Voice)
+
+		// ── TTS ────────────────────────────────────
+		ttsClient, err = tts.Init(cfg)
+		if err != nil {
+			log.Fatalf("main: TTS init failed: %v", err)
+		}
+		defer ttsClient.Close()
 	} else {
 		log.Println("main: [3/5] skipped — no cfg.yml (talking disabled)")
 	}

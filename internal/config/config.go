@@ -18,7 +18,8 @@ type Cfg struct {
 	Avatar AvatarConfig `yaml:"avatar"`
 }
 
-// ASRConfig holds the speech recognition configuration.
+// ASRConfig holds the speech recognition configuration (online API only;
+// the offline build ignores this section and uses local models instead).
 type ASRConfig struct {
 	URL        string `yaml:"url"`
 	Model      string `yaml:"model"`
@@ -34,7 +35,8 @@ type LLMConfig struct {
 	MaxTokens int    `yaml:"max_tokens"`
 }
 
-// TTSConfig holds the text-to-speech configuration.
+// TTSConfig holds the text-to-speech configuration (online API only; the
+// offline build ignores this section and uses local models instead).
 type TTSConfig struct {
 	URL        string `yaml:"url"`
 	Model      string `yaml:"model"`

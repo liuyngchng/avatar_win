@@ -2,13 +2,20 @@
 # build.ps1 — Avatar Desktop Windows 构建脚本（PowerShell 版）
 # ==============================================================================
 # 使用方式（无需安装 Git Bash / sh，Windows 自带 PowerShell）:
-#   powershell -ExecutionPolicy Bypass -File build.ps1            # 完整构建 + 打包 zip
-#   powershell -ExecutionPolicy Bypass -File build.ps1 clean      # 仅清理 dist/
-#   powershell -ExecutionPolicy Bypass -File build.ps1 sign       # 仅签名已有 exe
+#   powershell -ExecutionPolicy Bypass -File build.ps1                    # 完整构建在线版 + 打包 zip
+#   powershell -ExecutionPolicy Bypass -File build.ps1 -Variant offline   # 构建离线版（本地 ASR/TTS）
+#   powershell -ExecutionPolicy Bypass -File build.ps1 clean              # 仅清理 dist/
+#   powershell -ExecutionPolicy Bypass -File build.ps1 sign               # 仅签名已有 exe
+#
+# 版本说明:
+#   - online  默认。纯 Go 编译（CGO_ENABLED=0），使用在线 ASR/TTS API。
+#             无需 gcc / MinGW-w64。
+#   - offline 使用本地 sherpa-onnx 模型（SenseVoiceSmall + Matcha-TTS），
+#             无需网络。需要 MinGW-w64 gcc 编译，并打包 DLL + 模型文件。
 #
 # 产物:
 #   dist/avatar-desktop-x64.exe     # 独立可执行文件（已签名）
-#   dist/avatar-desktop-x64.zip     # 发布包：exe + cfg.yml + 使用说明.md
+#   dist/avatar-desktop-x64.zip     # 发布包：exe + cfg.yml + 使用说明.md（离线版额外含 DLL + 模型）
 #
 # 签名说明:
 #   使用自签名证书（cert/avatar-desktop-x64.pfx），构建时自动生成。
@@ -20,7 +27,11 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet("build", "clean", "sign")]
-    [string]$Mode = "build"
+    [string]$Mode = "build",
+
+    [Parameter()]
+    [ValidateSet("online", "offline")]
+    [string]$Variant = "online"
 )
 
 $ErrorActionPreference = "Stop"
@@ -71,6 +82,87 @@ function Find-Signtool {
 }
 $SIGNTOOL = Find-Signtool
 
+# ── 查找 MinGW-w64 x86_64 gcc ────────────────────────────────
+function Find-MinGWGCC {
+    # 1. 检查环境变量 CC
+    if ($env:CC) {
+        if (Test-Path $env:CC) { return $env:CC }
+        # CC 可能只是一个名字（比如 "gcc"），尝试在 PATH 中解析
+        $found = Get-Command $env:CC -ErrorAction SilentlyContinue
+        if ($found) { return $found.Source }
+    }
+
+    # 2. 按优先级搜索已知路径
+    $candidates = @(
+        # PATH 中的 x86_64 gcc 优先
+        (Get-Command x86_64-w64-mingw32-gcc.exe -ErrorAction SilentlyContinue).Source,
+        # 常见安装路径
+        "D:\software\MinGW-W64_x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\mingw64\bin\x86_64-w64-mingw32-gcc.exe",
+        "C:\mingw64\bin\x86_64-w64-mingw32-gcc.exe",
+        "C:\msys64\mingw64\bin\x86_64-w64-mingw32-gcc.exe",
+        # 最后回退：查找 PATH 中的 gcc 并通过 arch 验证
+        (Get-Command gcc.exe -ErrorAction SilentlyContinue).Source
+    )
+
+    foreach ($c in $candidates) {
+        if ($c -and (Test-Path $c)) {
+            # 验证它是 x86_64 架构
+            $arch = & $c -dumpmachine 2>&1
+            if ($LASTEXITCODE -eq 0 -and $arch -match "x86_64|amd64") {
+                return $c
+            }
+        }
+    }
+    return $null
+}
+
+# ── 查找 sherpa-onnx DLL 目录 ─────────────────────────────────
+function Find-SherpaDLLDir {
+    # 在 GOPATH 模块缓存中查找 sherpa-onnx-go-windows 的 DLL 目录
+    $gomodcache = (go env GOMODCACHE)
+    $dllDir = Join-Path $gomodcache "github.com\k2-fsa\sherpa-onnx-go-windows@v1.13.6\lib\x86_64-pc-windows-gnu"
+    if (Test-Path (Join-Path $dllDir "onnxruntime.dll")) {
+        return $dllDir
+    }
+
+    # 备选：手动拷贝到项目目录
+    $localDir = Join-Path $PSScriptRoot "sherpa-dll"
+    if (Test-Path (Join-Path $localDir "onnxruntime.dll")) {
+        return $localDir
+    }
+    return $null
+}
+
+# ── 离线版构建参数 ───────────────────────────────────────────
+$GO_TAGS = ""
+$SHERPA_DLL_DIR = ""
+
+if ($Variant -eq "offline") {
+    $GO_TAGS = "-tags offline"
+    $BUILD_CC = Find-MinGWGCC
+    if (-not $BUILD_CC) {
+        Write-Host ""
+        Write-Host "ERROR: 离线版编译需要 MinGW-w64 x86_64 gcc"
+        Write-Host "  下载地址: https://github.com/nixman/mingw-builds-binaries/releases"
+        Write-Host "  下载 x86_64-*-release-posix-seh-ucrt-*.7z，解压后将 bin 目录加入 PATH"
+        Write-Host "  或者指定 CC 环境变量: `$env:CC = 'D:\path\to\mingw64\bin\x86_64-w64-mingw32-gcc.exe'"
+        exit 1
+    }
+    $env:CC = $BUILD_CC
+    $env:CGO_ENABLED = "1"
+    Write-Host "    CGO enabled, CC=$BUILD_CC"
+
+    # 找到 sherpa-onnx 的 DLL 目录（用于打包）
+    $SHERPA_DLL_DIR = Find-SherpaDLLDir
+    if ($SHERPA_DLL_DIR) {
+        Write-Host "    Sherpa DLL dir: $SHERPA_DLL_DIR"
+    } else {
+        Write-Host "    WARNING: sherpa-onnx DLL directory not found — zip will not bundle runtime DLLs"
+    }
+} else {
+    $env:CGO_ENABLED = "0"
+}
+
 # ── 版本 / 构建时间 ─────────────────────────────────────────
 $VERSION = if ($env:VERSION) {
     $env:VERSION
@@ -85,7 +177,7 @@ Write-Host "║  Avatar Desktop — Windows Build Script              ║"
 Write-Host "╠══════════════════════════════════════════════════╣"
 Write-Host ("║  Version:    " + $VERSION)
 Write-Host ("║  Build time: " + $BUILD_TIME)
-Write-Host "║  CGO:        disabled (pure Go, no DLL deps)"
+Write-Host ("║  Variant:    " + $Variant + " (CGO=" + $env:CGO_ENABLED + ")")
 Write-Host ("║  Sign:       self-signed (" + $CERT_PFX + ")")
 Write-Host "╚══════════════════════════════════════════════════╝"
 
@@ -265,9 +357,8 @@ if ($SYSO_NEEDS_REGEN) {
     }
 }
 
-$env:CGO_ENABLED = "0"
 try {
-    & go build -trimpath "-ldflags=$GO_LDFLAGS" -o $exePath .
+    & go build -trimpath $GO_TAGS "-ldflags=$GO_LDFLAGS" -o $exePath .
     if ($LASTEXITCODE -ne 0) { throw "go build failed" }
 } finally {
     Remove-Item Env:\CGO_ENABLED -ErrorAction SilentlyContinue
@@ -338,6 +429,29 @@ try {
         Write-Host ("    Added: $($f.Dst)")
     }
 
+    # 离线版：额外打包 sherpa-onnx 运行时 DLL 和模型文件
+    if ($Variant -eq "offline") {
+        # DLL（onnxruntime.dll 等，运行时必需）
+        if ($SHERPA_DLL_DIR) {
+            Get-ChildItem $SHERPA_DLL_DIR -Filter "*.dll" | ForEach-Object {
+                Copy-Item $_.FullName (Join-Path $tmpPackDir $_.Name)
+                Write-Host ("    Added: " + $_.Name)
+            }
+        }
+
+        # 模型文件
+        foreach ($modelDir in @("models/asr", "models/tts")) {
+            if (Test-Path $modelDir) {
+                $dstModelDir = Join-Path $tmpPackDir $modelDir
+                New-Item -ItemType Directory -Force -Path $dstModelDir | Out-Null
+                Copy-Item (Join-Path $modelDir "*") $dstModelDir -Recurse -Force
+                Write-Host ("    Added: $modelDir/ (models)")
+            } else {
+                Write-Host "    WARNING: $modelDir not found — offline mode will fail without models"
+            }
+        }
+    }
+
     # 用 .NET 创建 zip（避免 PowerShell 5.1 Compress-Archive 的 bug）
     if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
     [System.IO.Compression.ZipFile]::CreateFromDirectory($tmpPackDir, $zipPath,
@@ -373,6 +487,13 @@ Write-Host ("║  Output:  " + (Join-Path $DIST_DIR $EXE_NAME))
 Write-Host ("║  Archive: " + (Join-Path $DIST_DIR $ZIP_NAME))
 Write-Host "╚══════════════════════════════════════════════════╝"
 Write-Host ""
-Write-Host "  To distribute, send the user:"
-Write-Host "    1. $ZIP_NAME — extract and double-click $EXE_NAME"
-Write-Host "    2. Edit cfg.yml and fill in WorkspaceId + API key"
+if ($Variant -eq "offline") {
+    Write-Host "  To distribute, send the user:"
+    Write-Host "    1. $ZIP_NAME — extract and double-click $EXE_NAME"
+    Write-Host "    2. 离线版无需 API Key，模型已随包分发"
+    Write-Host "    3. 若需在线对话，编辑 cfg.yml 将 provider 改为 online 并填 API Key"
+} else {
+    Write-Host "  To distribute, send the user:"
+    Write-Host "    1. $ZIP_NAME — extract and double-click $EXE_NAME"
+    Write-Host "    2. Edit cfg.yml and fill in WorkspaceId + API key"
+}
