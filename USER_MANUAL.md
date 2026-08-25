@@ -1,8 +1,8 @@
-# Avatar PC 数字人 — Windows 用户手册
+# Avatar Desktop 数字人 — Windows 用户手册
 
 ## 一、这是什么
 
-Avatar PC 是一款运行在 Windows 大屏/PC 上的 **3D 数字人问答应用**。用户点击屏幕或按空格键，对着麦克风说话，数字人会：
+Avatar Desktop 是一款运行在 Windows 大屏/PC 上的 **3D 数字人问答应用**。用户点击屏幕或按空格键，对着麦克风说话，数字人会：
 
 1. 听你说的话（语音识别）
 2. 理解并生成回答（大模型对话）
@@ -34,17 +34,17 @@ Avatar PC 是一款运行在 Windows 大屏/PC 上的 **3D 数字人问答应用
 软件无需安装，**解压即可运行**。交付物包含两个文件：
 
 ```
-avatar-pc.exe — 主程序（约 25 MB）
+avatar-desktop-x64.exe — 主程序（约 25 MB）
 cfg.yml        — 配置文件
 ```
 
 ### 步骤 1：放置文件
 
-将 `avatar-pc.exe` 和 `cfg.yml` 放在**同一个文件夹**里，例如：
+将 `avatar-desktop-x64.exe` 和 `cfg.yml` 放在**同一个文件夹**里，例如：
 
 ```
 D:\数字人\
-  ├── avatar-pc.exe
+  ├── avatar-desktop-x64.exe
   └── cfg.yml
 ```
 
@@ -56,7 +56,7 @@ D:\数字人\
 
 ### 步骤 3：双击运行
 
-双击 `avatar-pc.exe` 即可启动，会弹出一个窗口，里面站着 3D 数字人。
+双击 `avatar-desktop-x64.exe` 即可启动，会弹出一个窗口，里面站着 3D 数字人。
 
 ---
 
@@ -136,7 +136,7 @@ api_key: "sk-xxxxxxxxxxxx"
 
 ### 退出
 
-- 按 **Alt + F4** 关闭窗口；或从任务管理器结束 `avatar-pc.exe` 进程。
+- 按 **Alt + F4** 关闭窗口；或从任务管理器结束 `avatar-desktop-x64.exe` 进程。
 
 ---
 
@@ -144,7 +144,7 @@ api_key: "sk-xxxxxxxxxxxx"
 
 ### 1. 双击后没反应 / 闪退
 
-- 确认 `cfg.yml` 和 `avatar-pc.exe` 在同一个文件夹。
+- 确认 `cfg.yml` 和 `avatar-desktop-x64.exe` 在同一个文件夹。
 - 用记事本打开 `cfg.yml`，确认 `api_key` 和 url 里的 `WorkspaceId` 都填了，且没有拼错。
 - 确认 `api_key` 前后有引号 `"..."`，冒号后有一个空格。
 
@@ -181,11 +181,11 @@ api_key: "sk-xxxxxxxxxxxx"
 
 | 文件 | 说明 | 是否必填 |
 |------|------|---------|
-| `avatar-pc.exe` | 主程序 | 无需改动 |
+| `avatar-desktop-x64.exe` | 主程序 | 无需改动 |
 | `cfg.yml` | 配置文件 | **需要填写** WorkspaceId、API Key |
 | `cfg.yml.example` | 配置模板 | 参考，可删除 |
 
-> 所有依赖（3D 模型、前端资源）都已打包进 `avatar-pc.exe`，无需额外安装。
+> 所有依赖（3D 模型、前端资源）都已打包进 `avatar-desktop-x64.exe`，无需额外安装。
 
 ---
 

@@ -1,5 +1,5 @@
 ﻿# ==============================================================================
-# build.ps1 — Avatar PC Windows 构建脚本（PowerShell 版）
+# build.ps1 — Avatar Desktop Windows 构建脚本（PowerShell 版）
 # ==============================================================================
 # 使用方式（无需安装 Git Bash / sh，Windows 自带 PowerShell）:
 #   powershell -ExecutionPolicy Bypass -File build.ps1            # 完整构建 + 打包 zip
@@ -7,11 +7,11 @@
 #   powershell -ExecutionPolicy Bypass -File build.ps1 sign       # 仅签名已有 exe
 #
 # 产物:
-#   dist/avatar-pc.exe     # 独立可执行文件（已签名）
-#   dist/avatar-pc.zip     # 发布包：exe + cfg.yml + 使用说明.md
+#   dist/avatar-desktop-x64.exe     # 独立可执行文件（已签名）
+#   dist/avatar-desktop-x64.zip     # 发布包：exe + cfg.yml + 使用说明.md
 #
 # 签名说明:
-#   使用自签名证书（cert/avatar-pc.pfx），构建时自动生成。
+#   使用自签名证书（cert/avatar-desktop-x64.pfx），构建时自动生成。
 #   自签名 != 防冒充，但能检测文件是否被篡改。
 # ==============================================================================
 
@@ -25,17 +25,22 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# 抑制 Compress-Archive 内部的 Write-Progress 输出。
+# PowerShell 5.1 中 Write-Progress 经管道/格式化会触发
+# IndexOutOfRangeException（索引超出数组界限），关闭进度条即可避免。
+$ProgressPreference = "SilentlyContinue"
+
 # 工作目录固定到脚本所在目录，避免从别处调用时路径错乱
 Set-Location $PSScriptRoot
 
 # ── 配置 ────────────────────────────────────────────────────
-$APP_NAME   = "avatar-pc"
+$APP_NAME   = "avatar-desktop-x64"
 $DIST_DIR   = "dist"
 $ZIP_NAME   = "${APP_NAME}.zip"
 $EXE_NAME   = "${APP_NAME}.exe"
 $CERT_DIR   = "cert"
 $CERT_PFX   = Join-Path $CERT_DIR "${APP_NAME}.pfx"
-$CERT_PASS  = "avatar-pc-selfsign"  # 自签名证书密码（仅本地开发用）
+$CERT_PASS  = "avatar-desktop-x64-selfsign"  # 自签名证书密码（仅本地开发用）
 
 # 要打包进 zip 的附加文件（相对于项目根目录）
 $EXTRA_FILES = @(
@@ -76,7 +81,7 @@ $VERSION = if ($env:VERSION) {
 $BUILD_TIME = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd_HH:mm:ss_UTC")
 
 Write-Host "╔══════════════════════════════════════════════════╗"
-Write-Host "║  Avatar PC — Windows Build Script              ║"
+Write-Host "║  Avatar Desktop — Windows Build Script              ║"
 Write-Host "╠══════════════════════════════════════════════════╣"
 Write-Host ("║  Version:    " + $VERSION)
 Write-Host ("║  Build time: " + $BUILD_TIME)
@@ -112,8 +117,8 @@ function New-SelfSignedCert {
 
     $cert = New-SelfSignedCertificate `
         -Type CodeSigningCert `
-        -Subject "CN=Avatar PC" `
-        -FriendlyName "Avatar PC Self-Signed" `
+        -Subject "CN=Avatar Desktop" `
+        -FriendlyName "Avatar Desktop Self-Signed" `
         -CertStoreLocation "Cert:\CurrentUser\My" `
         -KeyUsage DigitalSignature `
         -KeyLength 2048 `
@@ -254,7 +259,7 @@ if ($SYSO_NEEDS_REGEN) {
     }
     if ($WINRES) {
         Write-Host "    Generating icon resource ($SYSO_FILE)..."
-        & $WINRES simply --arch amd64 --manifest gui --product-name "Avatar PC" `
+        & $WINRES simply --arch amd64 --manifest gui --product-name "Avatar Desktop" `
             --file-description "Desktop Avatar" --icon winres/icon.png
         if ($LASTEXITCODE -ne 0) { Write-Host "    WARNING: go-winres failed, building without icon" }
     }
@@ -309,39 +314,43 @@ End-Step
 # ── Step 5/5: 打包 zip ──────────────────────────────────────
 Start-Step "Step 5/5: Packaging release archive..."
 
-$exeZipName = $EXE_NAME  # 在 zip 内保持原名
+# Compress-Archive 在 PowerShell 5.1 中有 Write-Progress / out-lineoutput
+# 的 IndexOutOfRangeException bug，即使用 SilentlyContinue 也偶尔触发。
+# 改用 .NET ZipFile 直接打包，完全绕过 PowerShell cmdlet。
+# 需要先显式加载程序集（Compress-Archive 会隐式加载它，绕过 cmdlet 后就得自己加载）。
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-# 先打包 exe
-$zipPath = Join-Path $DIST_DIR $ZIP_NAME
-Compress-Archive -Path $exePath -DestinationPath $zipPath -CompressionLevel Optimal
+# 用绝对路径 — .NET ZipFile 不走 PowerShell 的 Set-Location，直接从进程 CWD 解析相对路径。
+$zipPath = Join-Path (Join-Path $PSScriptRoot $DIST_DIR) $ZIP_NAME
+$tmpPackDir = Join-Path ([System.IO.Path]::GetTempPath()) "avatar-pack-$([System.IO.Path]::GetRandomFileName())"
+New-Item -ItemType Directory -Force -Path $tmpPackDir | Out-Null
+try {
+    # 复制 exe
+    Copy-Item $exePath $tmpPackDir
 
-# 逐个追加额外文件
-foreach ($f in $EXTRA_FILES) {
-    if (-not (Test-Path $f.Src)) {
-        Write-Host "    WARNING: $($f.Src) not found, skipping"
-        continue
+    # 复制额外文件
+    foreach ($f in $EXTRA_FILES) {
+        if (-not (Test-Path $f.Src)) {
+            Write-Host "    WARNING: $($f.Src) not found, skipping"
+            continue
+        }
+        Copy-Item $f.Src (Join-Path $tmpPackDir $f.Dst)
+        Write-Host ("    Added: $($f.Dst)")
     }
-    # Compress-Archive 的 -Update 是追加模式，但无法指定 zip 内路径
-    # 创建一个临时目录，结构正确后追加
-    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "avatar-build-$([System.IO.Path]::GetRandomFileName())"
-    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
-    try {
-        Copy-Item $f.Src (Join-Path $tmpDir $f.Dst)
-        Compress-Archive -Path (Join-Path $tmpDir $f.Dst) -Update -DestinationPath $zipPath -CompressionLevel Optimal
-    } finally {
-        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
-    }
-    Write-Host ("    Added: $($f.Dst)")
+
+    # 用 .NET 创建 zip（避免 PowerShell 5.1 Compress-Archive 的 bug）
+    if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($tmpPackDir, $zipPath,
+        [System.IO.Compression.CompressionLevel]::Optimal, $false)
+} finally {
+    Remove-Item -Recurse -Force $tmpPackDir -ErrorAction SilentlyContinue
 }
 
 # 列出 zip 内容
 $zipSize = (Get-Item $zipPath).Length
 Write-Host ("    OK — {0} ({1:N1} MB)" -f $ZIP_NAME, ($zipSize / 1MB))
 Write-Host "    Contents:"
-# 用 .NET 读取 zip 条目（PowerShell 5.1 兼容方式）
-# 注意：.NET API 用进程当前目录解析相对路径，这里必须转成绝对路径
-$zipAbsPath = (Resolve-Path $zipPath).Path
-$zip = [System.IO.Compression.ZipFile]::OpenRead($zipAbsPath)
+$zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
 try {
     foreach ($entry in $zip.Entries) {
         Write-Host ("      {0}  {1:N0} bytes" -f $entry.FullName, $entry.Length)

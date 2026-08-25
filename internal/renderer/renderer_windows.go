@@ -3,6 +3,7 @@
 package renderer
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/jchv/go-webview2"
 	"github.com/liuyngchng/avatar-pc/internal/brain"
@@ -21,6 +23,8 @@ type webviewRenderer struct {
 	webview webview2.WebView
 	events  chan brain.Event
 	done    chan struct{}
+	// srv serves the embedded web assets; closed via Shutdown in Close().
+	srv *http.Server
 	// closeOnce guards done so Close() and the window-destroy path can both
 	// signal completion without double-closing the channel.
 	closeOnce sync.Once
@@ -46,6 +50,7 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 	r := &webviewRenderer{
 		events: make(chan brain.Event, 16),
 		done:   make(chan struct{}),
+		srv:    srv,
 	}
 
 	// Create the window and run the message pump on a dedicated OS thread.
@@ -62,7 +67,7 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 			Debug:     false,
 			AutoFocus: true,
 			WindowOptions: webview2.WindowOptions{
-				Title:      "Avatar PC",
+				Title:      "Avatar Desktop",
 				Width:      800,
 				Height:     1000,
 				Center:     true,
@@ -163,6 +168,13 @@ func (r *webviewRenderer) Done() <-chan struct{} {
 }
 
 func (r *webviewRenderer) Close() {
+	// Shut down the embedded asset HTTP server so the listener is released
+	// and in-flight requests drain cleanly instead of being abandoned.
+	if r.srv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = r.srv.Shutdown(ctx)
+		cancel()
+	}
 	r.webview.Destroy()
 	// Signal completion — either the window-destroy path in the goroutine
 	// below already closed `done`, or we close it here (Close() called

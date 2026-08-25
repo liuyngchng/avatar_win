@@ -39,8 +39,14 @@ type Client struct {
 	format     string
 	sampleRate int
 
+	// mu guards conn (connection establishment, reconnect, and close).
 	mu   sync.Mutex
 	conn *websocket.Conn
+
+	// reqMu serializes entire Transcribe calls. gorilla/websocket allows at
+	// most one concurrent writer per connection, so overlapping Transcribe
+	// calls would otherwise race on c.conn.WriteJSON/WriteMessage.
+	reqMu sync.Mutex
 }
 
 // NewClient creates a new DashScope realtime ASR client.
@@ -55,13 +61,36 @@ func NewClient(wsURL, model, apiKey string, format string, sampleRate int) *Clie
 	}
 }
 
-// Close closes the WebSocket connection.
+// Close closes the WebSocket connection gracefully.
+// It waits for reqMu to ensure no in-flight Transcribe is writing to the conn.
 func (c *Client) Close() {
+	c.reqMu.Lock()
+	defer c.reqMu.Unlock()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.closeLocked()
+	c.closeGracefulLocked()
 }
 
+// asrCloseGracePeriod is how long we wait for the WebSocket close handshake.
+const asrCloseGracePeriod = 3 * time.Second
+
+// closeGracefulLocked sends a proper WebSocket close frame before closing,
+// so the server sees a clean disconnection. Must be called with c.mu held.
+func (c *Client) closeGracefulLocked() {
+	if c.conn == nil {
+		return
+	}
+	closeMsg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")
+	c.conn.SetWriteDeadline(time.Now().Add(asrCloseGracePeriod))
+	_ = c.conn.WriteMessage(websocket.CloseMessage, closeMsg)
+	c.conn.Close()
+	c.conn = nil
+}
+
+// closeLocked force-closes the connection without a close handshake. Used on
+// error/reconnect paths where the connection is in an unknown state.
+// Must be called with c.mu held.
 func (c *Client) closeLocked() {
 	if c.conn != nil {
 		c.conn.Close()
@@ -72,7 +101,13 @@ func (c *Client) closeLocked() {
 // Transcribe sends PCM float32 audio samples to the ASR API via WebSocket
 // and returns the transcribed text. The WebSocket connection is reused across
 // calls; only the first call pays the TLS+WS handshake cost.
+//
+// Calls are serialized (reqMu) so that at most one run-task/finish-task cycle
+// is in flight on the shared connection at any time.
 func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
+	c.reqMu.Lock()
+	defer c.reqMu.Unlock()
+
 	t0 := time.Now()
 
 	c.mu.Lock()
@@ -82,6 +117,10 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 		c.mu.Unlock()
 		return "", err
 	}
+
+	// Set a read deadline so a hung server doesn't block the reqMu forever.
+	// Each task pair (run→finish) should complete well within 30 seconds.
+	c.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 
 	// Generate task ID.
 	taskID := generateID()

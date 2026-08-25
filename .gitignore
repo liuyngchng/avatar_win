@@ -4,7 +4,7 @@
 # Runtime logs
 avatar.log
 
-# Config with secrets (keep cfg.yml.example as template)
+# Config with secrets (keep cfg.yml.template as template)
 cfg.yml
 
 # Build artifacts

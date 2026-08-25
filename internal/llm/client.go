@@ -20,6 +20,7 @@ type Client struct {
 	model      string
 	apiKey     string
 	system     string
+	maxTokens  int
 	httpClient *http.Client
 
 	mu      sync.Mutex    // guards history
@@ -30,16 +31,23 @@ type Client struct {
 // one assistant reply) are kept as context for the next request.
 const maxHistoryTurns = 10
 
+// defaultMaxTokens is used when no max_tokens is configured in cfg.yml.
+const defaultMaxTokens = 512
+
 // NewClient creates a new online LLM client.
-func NewClient(baseURL, model, apiKey, name string) *Client {
+func NewClient(baseURL, model, apiKey, name string, maxTokens int) *Client {
 	if name == "" {
 		name = "小然"
 	}
+	if maxTokens <= 0 {
+		maxTokens = defaultMaxTokens
+	}
 	now := time.Now()
 	return &Client{
-		baseURL: baseURL,
-		model:   model,
-		apiKey:  apiKey,
+		baseURL:   baseURL,
+		model:     model,
+		apiKey:    apiKey,
+		maxTokens: maxTokens,
 		system: fmt.Sprintf(
 			"今天是%s %s。你是一个语音助手，名字叫「%s」。用口语化的中文回复，自然友好、直接明了。"+
 				"闲聊或简单问题控制在1-3句话（80字以内）；"+
@@ -161,7 +169,7 @@ func (c *Client) chat(messages []chatMessage) (string, error) {
 		Model:       c.model,
 		Messages:    messages,
 		Stream:      false,
-		MaxTokens:   512,
+		MaxTokens:   c.maxTokens,
 		Temperature: 0.7,
 		TopP:        0.9,
 	}
@@ -226,7 +234,7 @@ func (c *Client) ChatStream(userText string) <-chan string {
 			Model:       c.model,
 			Messages:    messages,
 			Stream:      true,
-			MaxTokens:   512,
+			MaxTokens:   c.maxTokens,
 			Temperature: 0.7,
 			TopP:        0.9,
 		}

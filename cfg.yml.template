@@ -1,4 +1,4 @@
-# Avatar PC — 数字人 API 配置
+# Avatar Desktop — 数字人 API 配置
 # 将此文件放在 avatar.exe 同目录下，启动时自动读取。
 #
 # 接入阿里云百炼 DashScope 实时 WebSocket API：
@@ -18,6 +18,8 @@ llm:
   # 百炼兼容 OpenAI chat/completions，可复用同一个 URL 结构
   url: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
   model: "qwen-plus"
+  # 每次回复的最大 token 数（可选，默认 512）
+  max_tokens: 512
   # 人偶的名字（会写入系统提示词，可自行修改）
   name: "小然"
 

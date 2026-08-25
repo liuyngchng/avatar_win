@@ -41,8 +41,14 @@ type Client struct {
 	format     string
 	sampleRate int
 
+	// mu guards conn (connection establishment, reconnect, and close).
 	mu   sync.Mutex
 	conn *websocket.Conn
+
+	// reqMu serializes entire Synthesize calls. gorilla/websocket allows at
+	// most one concurrent writer per connection, so overlapping Synthesize
+	// calls would otherwise race on c.conn.WriteJSON.
+	reqMu sync.Mutex
 }
 
 // SampleRate returns the output sample rate (e.g. 24000).
@@ -63,25 +69,41 @@ func NewClient(wsURL, model, voice, apiKey string, format string, sampleRate int
 	}
 }
 
-// Close sends session.finish and closes the WebSocket connection.
+// Close sends session.finish and closes the WebSocket connection gracefully.
+// It waits for reqMu to ensure no in-flight Synthesize is writing to the conn.
 func (c *Client) Close() {
+	c.reqMu.Lock()
+	defer c.reqMu.Unlock()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.closeLocked()
+	c.closeGracefulLocked()
 }
 
-func (c *Client) closeLocked() {
+// closeGracePeriod is how long we wait for session.finished after sending
+// session.finish during graceful shutdown.
+const closeGracePeriod = 3 * time.Second
+
+// closeGracefulLocked performs a clean shutdown handshake: session.finish →
+// wait for session.finished → WebSocket close frame → conn.Close.
+// Must be called with c.mu held.
+func (c *Client) closeGracefulLocked() {
 	if c.conn == nil {
 		return
 	}
-	// Best-effort: send session.finish.
+	// Best-effort: send session.finish with a write deadline so we don't
+	// hang forever if the network is gone.
 	finishEvent := map[string]interface{}{
 		"event_id": fmt.Sprintf("event_%d", time.Now().UnixNano()),
 		"type":     "session.finish",
 	}
-	_ = c.conn.WriteJSON(finishEvent)
-	// Give the server a moment to send session.finished.
-	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	c.conn.SetWriteDeadline(time.Now().Add(closeGracePeriod))
+	if err := c.conn.WriteJSON(finishEvent); err != nil {
+		log.Printf("tts: session.finish write failed (will close): %v", err)
+	}
+
+	// Read until session.finished or the grace period expires.
+	c.conn.SetReadDeadline(time.Now().Add(closeGracePeriod))
 	for {
 		_, msg, err := c.conn.ReadMessage()
 		if err != nil {
@@ -95,8 +117,25 @@ func (c *Client) closeLocked() {
 			}
 		}
 	}
+
+	// Send a proper WebSocket close frame so the server sees a clean
+	// disconnection rather than a TCP RST.
+	closeMsg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")
+	c.conn.SetWriteDeadline(time.Now().Add(closeGracePeriod))
+	_ = c.conn.WriteMessage(websocket.CloseMessage, closeMsg)
 	c.conn.Close()
 	c.conn = nil
+}
+
+// closeLocked force-closes the connection without a graceful handshake.
+// Used on error/reconnect paths where the connection is in an unknown state
+// and waiting for session.finished would just block.
+// Must be called with c.mu held.
+func (c *Client) closeLocked() {
+	if c.conn != nil {
+		c.conn.Close()
+		c.conn = nil
+	}
 }
 
 // SynthesizeResult contains the result of a TTS synthesis.
@@ -109,7 +148,13 @@ type SynthesizeResult struct {
 // Synthesize converts text to speech via the Qwen-TTS Realtime WebSocket API.
 // The WebSocket connection is reused across calls; only the first call pays
 // the TLS+WS handshake cost.
+//
+// Calls are serialized (reqMu) so that at most one append/commit/read cycle
+// is in flight on the shared connection at any time.
 func (c *Client) Synthesize(text string, speed float32) (*SynthesizeResult, error) {
+	c.reqMu.Lock()
+	defer c.reqMu.Unlock()
+
 	t0 := time.Now()
 
 	c.mu.Lock()

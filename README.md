@@ -1,4 +1,4 @@
-# Avatar PC — Windows 3D 数字人
+# Avatar Desktop — Windows 3D 数字人
 
 基于 Go + three.js + three-vrm 的 Windows 3D 数字人，面向大屏/kiosk 场景。
 
@@ -122,11 +122,11 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 powershell -ExecutionPolicy Bypass -File build.ps1 release
 ```
 
-产物：`dist/avatar-pc.exe`（22MB，单文件，自签名）。
+产物：`dist/avatar-desktop-x64.exe`（22MB，单文件，自签名）。
 
 ## 配置
 
-复制 `cfg.yml.example` 为 `cfg.yml`，填入阿里云百炼 API Key：
+复制 `cfg.yml.template` 为 `cfg.yml`，填入阿里云百炼 API Key：
 
 ```yaml
 asr:
@@ -135,6 +135,7 @@ asr:
 llm:
   url: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
   model: "qwen-plus"
+  max_tokens: 512
 tts:
   url: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
   model: "qwen3-tts-flash"
@@ -144,7 +145,7 @@ api_key: "your-api-key"
 
 ## 使用
 
-1. 双击 `avatar-pc.exe`
+1. 双击 `avatar-desktop-x64.exe`
 2. 点击屏幕或按空格开始对话
 3. 说话 → ASR 识别 → LLM 回复 → TTS 语音 + 口型动画
 

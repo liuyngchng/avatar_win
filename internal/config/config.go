@@ -28,9 +28,10 @@ type ASRConfig struct {
 
 // LLMConfig holds the chat model endpoint and model name.
 type LLMConfig struct {
-	URL   string `yaml:"url"`
-	Model string `yaml:"model"`
-	Name  string `yaml:"name"`
+	URL       string `yaml:"url"`
+	Model     string `yaml:"model"`
+	Name      string `yaml:"name"`
+	MaxTokens int    `yaml:"max_tokens"`
 }
 
 // TTSConfig holds the text-to-speech configuration.
