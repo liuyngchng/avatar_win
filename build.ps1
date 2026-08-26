@@ -54,10 +54,17 @@ $CERT_PFX   = Join-Path $CERT_DIR "${APP_NAME}.pfx"
 $CERT_PASS  = "avatar-desktop-x64-selfsign"  # 自签名证书密码（仅本地开发用）
 
 # 要打包进 zip 的附加文件（相对于项目根目录）
-$EXTRA_FILES = @(
-    @{ Src = "cfg.yml.template"; Dst = "cfg.yml" },
-    @{ Src = "USER_MANUAL.md";   Dst = "使用说明.md" }
-)
+if ($Variant -eq "offline") {
+    $EXTRA_FILES = @(
+        @{ Src = "cfg.yml.template";       Dst = "cfg.yml" },
+        @{ Src = "USER_MANUAL_OFFLINE.md"; Dst = "使用说明.md" }
+    )
+} else {
+    $EXTRA_FILES = @(
+        @{ Src = "cfg.yml.template"; Dst = "cfg.yml" },
+        @{ Src = "USER_MANUAL.md";   Dst = "使用说明.md" }
+    )
+}
 
 # 构建参数
 $LDFLAGS = "-s -w -H windowsgui"
