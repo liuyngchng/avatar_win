@@ -63,6 +63,7 @@ func NewOfflineEngine(modelDir string) (Synthesizer, error) {
 				Vocoder:       p.Vocoder,
 				Tokens:        p.Tokens,
 				Lexicon:       p.Lexicon,
+				DataDir:       modelDir, // .fst files + dict/ for Chinese text normalization
 				NoiseScale:    0.667,
 				LengthScale:   1.0,
 			},

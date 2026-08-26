@@ -10,6 +10,11 @@ cfg.yml
 # Build artifacts
 dist/
 
+# Offline model files (large binaries, distributed separately via zip).
+# Everything under models/ is ignored except the README.
+models/*
+!models/README.md
+
 # JS obfuscation backup (temporary, created/restored by build.ps1)
 web/index.html.orig
 
