@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/jchv/go-webview2"
-	"github.com/liuyngchng/avatar-pc/internal/brain"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/brain"
 )
 
 type webviewRenderer struct {
@@ -70,7 +70,7 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 				Title:      "Avatar Desktop",
 				Width:      800,
 				Height:     1000,
-				Center:     true,
+				Center:     false,
 				Borderless: true,
 			},
 		})
@@ -79,6 +79,10 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 			ready <- errors.New("webview2: failed to create window")
 			return
 		}
+
+		// Position the window at the bottom-right of the screen from the
+		// start, so it doesn't flash centered before the JS resizes it.
+		w.BottomRight()
 
 		// Make the WebView2 control background transparent so the
 		// Windows desktop shows through behind the VRM avatar.
@@ -111,13 +115,13 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 			log.Printf("renderer: bind moveWindow warning: %v", err)
 		}
 
-		// Bind goBridge_setWindowSize so JS can resize + center the window.
+		// Bind goBridge_setWindowSize so JS can resize + bottom-right the window.
 		// The avatar should be screen-height/2, so JS computes the desired
 		// pixel size from the avatar's bounding box and the screen metrics,
 		// then calls this to apply it.
 		if err := w.Bind("goBridge_setWindowSize", func(width, height int) {
 			w.SetSize(width, height, webview2.HintNone)
-			w.Center()
+			w.BottomRight()
 		}); err != nil {
 			log.Printf("renderer: bind setWindowSize warning: %v", err)
 		}

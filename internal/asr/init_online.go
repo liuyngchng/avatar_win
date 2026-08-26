@@ -5,7 +5,7 @@ package asr
 import (
 	"fmt"
 
-	"github.com/liuyngchng/avatar-pc/internal/config"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/config"
 )
 
 // initASR creates the online ASR client from cfg.yml.

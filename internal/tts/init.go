@@ -8,7 +8,7 @@
 package tts
 
 import (
-	"github.com/liuyngchng/avatar-pc/internal/config"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/config"
 )
 
 // Init creates a TTS Synthesizer from the given configuration.

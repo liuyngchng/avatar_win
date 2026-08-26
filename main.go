@@ -13,14 +13,14 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/liuyngchng/avatar-pc/internal/asr"
-	"github.com/liuyngchng/avatar-pc/internal/audio"
-	"github.com/liuyngchng/avatar-pc/internal/brain"
-	"github.com/liuyngchng/avatar-pc/internal/config"
-	"github.com/liuyngchng/avatar-pc/internal/llm"
-	"github.com/liuyngchng/avatar-pc/internal/logfile"
-	"github.com/liuyngchng/avatar-pc/internal/renderer"
-	"github.com/liuyngchng/avatar-pc/internal/tts"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/asr"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/audio"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/brain"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/config"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/llm"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/logfile"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/renderer"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/tts"
 )
 
 //go:embed web
@@ -133,16 +133,18 @@ func main() {
 	log.Println("main: [4/5] audio recorder created OK")
 	defer recorder.Stop()
 
-	// Step 5: Determine idle animation flag.
+	// Step 5: Determine idle animation flag and wake word.
 	idleAnims := true // default: enabled
+	wakeWord := ""    // default: "小冉" (applied in brain)
 	if cfg != nil {
 		idleAnims = cfg.Avatar.IdleAnimations()
+		wakeWord = cfg.WakeWord
 	}
-	log.Printf("main: idle animations enabled = %v", idleAnims)
+	log.Printf("main: idle animations enabled = %v, wake word = %q", idleAnims, wakeWord)
 
 	// Step 5: Start the brain (state machine) and event loops.
 	log.Println("main: [5/5] starting brain state machine...")
-	sm := brain.NewStateMachine(ttsClient, asrClient, llmClient, player, recorder, idleAnims)
+	sm := brain.NewStateMachine(ttsClient, asrClient, llmClient, player, recorder, idleAnims, wakeWord)
 
 	// Start the FSM loop.
 	go sm.Run()

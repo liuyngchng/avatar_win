@@ -3,7 +3,7 @@
 package asr
 
 import (
-	"github.com/liuyngchng/avatar-pc/internal/config"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/config"
 )
 
 // initASR creates the offline ASR engine (SenseVoiceSmall).

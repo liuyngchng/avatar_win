@@ -3,7 +3,7 @@
 package tts
 
 import (
-	"github.com/liuyngchng/avatar-pc/internal/config"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/config"
 )
 
 // initTTS creates the offline TTS engine (Matcha-TTS + vocos).

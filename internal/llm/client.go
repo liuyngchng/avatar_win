@@ -37,7 +37,7 @@ const defaultMaxTokens = 512
 // NewClient creates a new online LLM client.
 func NewClient(baseURL, model, apiKey, name string, maxTokens int) *Client {
 	if name == "" {
-		name = "小然"
+		name = "小冉"
 	}
 	if maxTokens <= 0 {
 		maxTokens = defaultMaxTokens

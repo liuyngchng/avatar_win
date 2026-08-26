@@ -65,6 +65,11 @@ type WebView interface {
 	// a SetSize call to keep the window centered.
 	Center()
 
+	// BottomRight moves the window so its bottom-right corner aligns with
+	// the bottom-right corner of the primary screen. Useful for desktop
+	// companions that should sit in the corner.
+	BottomRight()
+
 	// Navigate navigates webview to the given URL. URL may be a data URI, i.e.
 	// "data:text/text,<html>...</html>". It is often ok not to url-encode it
 	// properly, webview will re-encode it for you.

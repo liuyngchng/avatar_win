@@ -599,3 +599,24 @@ func (w *webview) Center() {
 		w32.SWPNoZOrder|w32.SWPNoSize|w32.SWPNoActivate,
 	)
 }
+
+// BottomRight moves the window so its bottom-right corner aligns with the
+// bottom-right corner of the primary screen.
+func (w *webview) BottomRight() {
+	var rect w32.Rect
+	w32.GetWindowRect(w.hwnd, &rect)
+	cw := rect.Right - rect.Left
+	ch := rect.Bottom - rect.Top
+	screenW, _, _ := w32.User32GetSystemMetrics.Call(w32.SM_CXSCREEN)
+	screenH, _, _ := w32.User32GetSystemMetrics.Call(w32.SM_CYSCREEN)
+	if screenW == 0 || screenH == 0 {
+		return
+	}
+	x := int32(screenW) - cw
+	y := int32(screenH) - ch
+	_, _, _ = w32.User32SetWindowPos.Call(
+		w.hwnd, 0,
+		uintptr(x), uintptr(y), 0, 0,
+		w32.SWPNoZOrder|w32.SWPNoSize|w32.SWPNoActivate,
+	)
+}

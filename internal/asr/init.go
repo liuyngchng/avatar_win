@@ -8,7 +8,7 @@
 package asr
 
 import (
-	"github.com/liuyngchng/avatar-pc/internal/config"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/config"
 )
 
 // Init creates an ASR Transcriber from the given configuration.

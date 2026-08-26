@@ -25,7 +25,7 @@ llm:
   # 每次回复的最大 token 数（可选，默认 512）
   max_tokens: 512
   # 人偶的名字（会写入系统提示词，可自行修改）
-  name: "小然"
+  name: "小冉"
 
 tts:
   # Qwen-TTS Realtime WebSocket API，北京地域
@@ -37,6 +37,9 @@ tts:
 
 # 百炼 API Key（从 https://bailian.console.aliyun.com 获取）
 api_key: ""
+
+# 唤醒词（可自定义，默认"小冉"）
+wake_word: "小冉"
 
 # 数字人行为配置
 avatar:

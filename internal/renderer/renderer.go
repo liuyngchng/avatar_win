@@ -4,7 +4,7 @@ import (
 	"embed"
 	"io/fs"
 
-	"github.com/liuyngchng/avatar-pc/internal/brain"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/brain"
 )
 
 // Renderer is the window host interface.

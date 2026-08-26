@@ -1,4 +1,4 @@
-module github.com/liuyngchng/avatar-pc
+module github.com/liuyngchng/avatar-desktop-x64
 
 go 1.24.13
 

@@ -5,7 +5,7 @@ package tts
 import (
 	"fmt"
 
-	"github.com/liuyngchng/avatar-pc/internal/config"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/config"
 )
 
 // initTTS creates the online TTS client from cfg.yml.

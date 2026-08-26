@@ -8,10 +8,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/liuyngchng/avatar-pc/internal/asr"
-	"github.com/liuyngchng/avatar-pc/internal/audio"
-	"github.com/liuyngchng/avatar-pc/internal/llm"
-	"github.com/liuyngchng/avatar-pc/internal/tts"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/asr"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/audio"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/llm"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/tts"
 
 	"github.com/ebitengine/oto/v3"
 )
@@ -44,6 +44,12 @@ type StateMachine struct {
 	busy       bool
 	generation int64        // incremented on each tap; used to detect stale pipelines
 	cancel     chan struct{} // closed when the current pipeline should abort
+
+	// wakeWordConfig is the wake word from cfg.yml (default "小冉").
+	wakeWordConfig string
+	// wakeDetector is the background wake-word listener, active while idle.
+	// Guarded by mu.
+	wakeDetector *wakeWordDetector
 }
 
 // NewStateMachine creates a state machine in ModeIdle.
@@ -54,23 +60,29 @@ func NewStateMachine(
 	audioPlayer *audio.Player,
 	recorder audio.Recorder,
 	idleAnimationsEnabled bool,
+	wakeWord string,
 ) *StateMachine {
-	return &StateMachine{
+	sm := &StateMachine{
 		state: State{
 			Mode:                  ModeIdle,
 			Emotion:               EmotionNeutral,
 			IdleAnimationsEnabled: idleAnimationsEnabled,
 		},
-		stateChanges: make(chan State, 16),
-		events:       make(chan Event, 16),
-		visemes:      make(chan VisemeEvent, 64),
-		ttsClient:    ttsClient,
-		asrClient:    asrClient,
-		llmClient:    llmClient,
-		audioPlayer:  audioPlayer,
-		recorder:     recorder,
-		cancel:       make(chan struct{}),
+		stateChanges:  make(chan State, 16),
+		events:        make(chan Event, 16),
+		visemes:       make(chan VisemeEvent, 64),
+		ttsClient:     ttsClient,
+		asrClient:     asrClient,
+		llmClient:     llmClient,
+		audioPlayer:   audioPlayer,
+		recorder:      recorder,
+		cancel:        make(chan struct{}),
+		wakeWordConfig: wakeWord,
 	}
+	// Start the wake word detector in the background. It will only activate
+	// when the state machine is idle and API clients are initialized.
+	sm.startWakeWordDetectorLocked()
+	return sm
 }
 
 // Run starts the FSM loop. It blocks until the channel is closed.
@@ -133,6 +145,9 @@ func (sm *StateMachine) handleEvent(ev Event) {
 
 		sm.mu.Lock()
 
+		// Stop the wake word detector while we're busy.
+		sm.cancelWakeDetectorLocked()
+
 		// Increment generation so any running pipeline knows it's stale.
 		sm.generation++
 		gen := sm.generation
@@ -152,7 +167,11 @@ func (sm *StateMachine) handleEvent(ev Event) {
 		sm.setState(ModeListening, EmotionNeutral, "")
 		sm.emit()
 
-		go sm.pipeline(gen)
+		// If the event carries pre-existing text (e.g. wake word followed by
+		// "今天天气怎么样？"), skip recording + ASR and go straight to LLM.
+		preExistingText, _ := ev.Data.(string)
+
+		go sm.pipeline(gen, preExistingText)
 	}
 }
 
@@ -167,8 +186,21 @@ func (sm *StateMachine) setState(mode Mode, emotion Emotion, responseText string
 	}
 }
 
+// setStateLocked is like setState but the caller must already hold sm.mu.
+func (sm *StateMachine) setStateLocked(mode Mode, emotion Emotion, responseText string) {
+	sm.state.Mode = mode
+	sm.state.Emotion = emotion
+	if responseText != "" {
+		sm.state.ResponseText = responseText
+	}
+}
+
 // pipeline runs a full conversation turn:
 // record → ASR → LLM (stream) + TTS (overlap) → play + viseme → idle.
+//
+// If preExistingText is non-empty (e.g. the user said the wake word followed
+// by a command), recording and ASR are skipped and the text goes straight to
+// the LLM.
 //
 // LLM and TTS run concurrently: as soon as a complete sentence arrives from
 // the streaming LLM, it is sent to TTS while the LLM continues generating
@@ -177,7 +209,7 @@ func (sm *StateMachine) setState(mode Mode, emotion Emotion, responseText string
 // gen is the generation number at the time this pipeline was created.
 // If a newer generation exists (the user tapped again), this pipeline
 // aborts early.
-func (sm *StateMachine) pipeline(gen int64) {
+func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	t0 := time.Now() // ⏱ pipeline start (user trigger)
 
 	// Clear the busy flag only when this pipeline is still the current one.
@@ -185,8 +217,14 @@ func (sm *StateMachine) pipeline(gen int64) {
 		sm.mu.Lock()
 		if sm.generation == gen {
 			sm.busy = false
+			// Restart the wake word detector when back to idle.
+			if sm.state.Mode == ModeIdle || sm.state.Mode == ModeThinking {
+				sm.setStateLocked(ModeIdle, EmotionNeutral, "")
+				sm.startWakeWordDetectorLocked()
+			}
 		}
 		sm.mu.Unlock()
+		sm.emit()
 	}()
 
 	// Snapshot the cancel channel for this generation.
@@ -203,52 +241,61 @@ func (sm *StateMachine) pipeline(gen int64) {
 		}
 	}
 
-	// 1. Record until silence (simple energy-based VAD).
-	tRecStart := time.Now() // ⏱ recording start
-	samples := sm.recordWithVAD(cancel)
-	tRecEnd := time.Now() // ⏱ recording end
-	if canceled() {
-		log.Printf("state: canceled after recording (gen=%d)", gen)
-		return
-	}
-	if len(samples) == 0 {
-		log.Printf("state: no speech detected (gen=%d)", gen)
-		sm.setState(ModeIdle, EmotionNeutral, "")
-		sm.emit()
-		return
-	}
-	log.Printf("⏱ [timing] recording: %dms (total elapsed: %dms)", tRecEnd.Sub(tRecStart).Milliseconds(), tRecEnd.Sub(t0).Milliseconds())
+	var userText string
+	var err error
+	var tRecStart, tRecEnd, tASRStart, tASREnd time.Time
+	if preExistingText != "" {
+		// Wake word + command path: no recording or ASR needed.
+		userText = preExistingText
+		log.Printf("state: user said %q (from wake word, gen=%d)", userText, gen)
+	} else {
+		// 1. Record until silence (simple energy-based VAD).
+		tRecStart = time.Now() // ⏱ recording start
+		samples := sm.recordWithVAD(cancel)
+		tRecEnd = time.Now() // ⏱ recording end
+		if canceled() {
+			log.Printf("state: canceled after recording (gen=%d)", gen)
+			return
+		}
+		if len(samples) == 0 {
+			log.Printf("state: no speech detected (gen=%d)", gen)
+			sm.setState(ModeIdle, EmotionNeutral, "")
+			sm.emit()
+			return
+		}
+		log.Printf("⏱ [timing] recording: %dms (total elapsed: %dms)", tRecEnd.Sub(tRecStart).Milliseconds(), tRecEnd.Sub(t0).Milliseconds())
 
-	// 2. ASR.
-	sm.setState(ModeThinking, EmotionNeutral, "")
-	sm.emit()
-
-	tASRStart := time.Now() // ⏱ ASR start
-	userText, err := sm.asrClient.Transcribe(samples, recorderSampleRate)
-	tASREnd := time.Now() // ⏱ ASR end
-	if canceled() {
-		log.Printf("state: canceled after ASR (gen=%d)", gen)
-		return
-	}
-	if err != nil {
-		log.Printf("state: ASR failed: %v", err)
-		sm.setState(ModeIdle, EmotionNeutral, "")
+		// 2. ASR.
+		sm.setState(ModeThinking, EmotionNeutral, "")
 		sm.emit()
-		return
-	}
-	userText = trimSpace(userText)
-	if userText == "" {
-		log.Printf("state: ASR returned empty text")
-		sm.setState(ModeIdle, EmotionNeutral, "")
-		sm.emit()
-		return
-	}
 
-	sm.mu.Lock()
-	sm.state.LastUserText = userText
-	sm.mu.Unlock()
-	log.Printf("state: user said %q (gen=%d)", userText, gen)
-	log.Printf("⏱ [timing] ASR: %dms (total elapsed: %dms)", tASREnd.Sub(tASRStart).Milliseconds(), tASREnd.Sub(t0).Milliseconds())
+		tASRStart = time.Now() // ⏱ ASR start
+		userText, err = sm.asrClient.Transcribe(samples, recorderSampleRate)
+		tASREnd = time.Now() // ⏱ ASR end
+		if canceled() {
+			log.Printf("state: canceled after ASR (gen=%d)", gen)
+			return
+		}
+		if err != nil {
+			log.Printf("state: ASR failed: %v", err)
+			sm.setState(ModeIdle, EmotionNeutral, "")
+			sm.emit()
+			return
+		}
+		userText = trimSpace(userText)
+		if userText == "" {
+			log.Printf("state: ASR returned empty text")
+			sm.setState(ModeIdle, EmotionNeutral, "")
+			sm.emit()
+			return
+		}
+
+		sm.mu.Lock()
+		sm.state.LastUserText = userText
+		sm.mu.Unlock()
+		log.Printf("state: user said %q (gen=%d)", userText, gen)
+		log.Printf("⏱ [timing] ASR: %dms (total elapsed: %dms)", tASREnd.Sub(tASRStart).Milliseconds(), tASREnd.Sub(t0).Milliseconds())
+	}
 
 	// Re-emit so the frontend shows the recognized text during thinking.
 	sm.emit()

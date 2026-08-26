@@ -11,11 +11,12 @@ import (
 
 // Cfg holds all API configuration for the avatar services.
 type Cfg struct {
-	ASR    ASRConfig    `yaml:"asr"`
-	LLM    LLMConfig    `yaml:"llm"`
-	TTS    TTSConfig    `yaml:"tts"`
-	APIKey string       `yaml:"api_key"`
-	Avatar AvatarConfig `yaml:"avatar"`
+	ASR      ASRConfig    `yaml:"asr"`
+	LLM      LLMConfig    `yaml:"llm"`
+	TTS      TTSConfig    `yaml:"tts"`
+	APIKey   string       `yaml:"api_key"`
+	WakeWord string       `yaml:"wake_word"`
+	Avatar   AvatarConfig `yaml:"avatar"`
 }
 
 // ASRConfig holds the speech recognition configuration (online API only;
