@@ -15,5 +15,5 @@ func initTTS(cfg *config.Cfg) (Synthesizer, error) {
 	if cfg.TTS.URL == "" {
 		return nil, fmt.Errorf("tts: online build requires cfg.yml tts.url (build with -tags offline for local TTS)")
 	}
-	return NewClient(cfg.TTS.URL, cfg.TTS.Model, cfg.TTS.Voice, cfg.APIKey, cfg.TTS.Format, cfg.TTS.SampleRate), nil
+	return NewClient(cfg.TTS.URL, cfg.TTS.Model, cfg.TTS.Voice, cfg.APIKey, cfg.TTS.Format, cfg.TTS.SampleRate, config.ProxyFunc(cfg.Proxy)), nil
 }

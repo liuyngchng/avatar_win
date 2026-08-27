@@ -7,10 +7,10 @@
 //   - Send session.update (voice, format, sample_rate, mode=commit)
 //   - Receive session.updated
 //   - For each Synthesize call:
-//     - Send input_text_buffer.append (text)
-//     - Send input_text_buffer.commit
-//     - Receive response.audio.delta (base64 PCM) chunks
-//     - Receive response.done
+//   - Send input_text_buffer.append (text)
+//   - Send input_text_buffer.commit
+//   - Receive response.audio.delta (base64 PCM) chunks
+//   - Receive response.done
 //   - On Close: send session.finish, receive session.finished, close
 //
 // The WebSocket connection is reused across Synthesize calls to avoid
@@ -25,6 +25,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -49,6 +50,11 @@ type Client struct {
 	// most one concurrent writer per connection, so overlapping Synthesize
 	// calls would otherwise race on c.conn.WriteJSON.
 	reqMu sync.Mutex
+
+	// dialer is the websocket.Dialer used for connecting. It is configured
+	// once at creation time so that proxy settings (from cfg.yml or env vars)
+	// are baked in.
+	dialer *websocket.Dialer
 }
 
 // SampleRate returns the output sample rate (e.g. 24000).
@@ -58,7 +64,9 @@ func (c *Client) SampleRate() int {
 
 // NewClient creates a new DashScope Qwen-TTS realtime client.
 // The connection is established lazily on the first Synthesize call.
-func NewClient(wsURL, model, voice, apiKey string, format string, sampleRate int) *Client {
+// proxyFunc is the http.Proxy function used for the WebSocket connection
+// (e.g. config.ProxyFunc(cfg.Proxy)).
+func NewClient(wsURL, model, voice, apiKey string, format string, sampleRate int, proxyFunc func(*http.Request) (*url.URL, error)) *Client {
 	return &Client{
 		wsURL:      wsURL,
 		model:      model,
@@ -66,6 +74,10 @@ func NewClient(wsURL, model, voice, apiKey string, format string, sampleRate int
 		apiKey:     apiKey,
 		format:     format,
 		sampleRate: sampleRate,
+		dialer: &websocket.Dialer{
+			Proxy:            proxyFunc,
+			HandshakeTimeout: 30 * time.Second,
+		},
 	}
 }
 
@@ -230,7 +242,7 @@ func (c *Client) ensureConnectedLocked() error {
 	header := make(http.Header)
 	header.Set("Authorization", "Bearer "+c.apiKey)
 
-	conn, resp, err := websocket.DefaultDialer.Dial(url, header)
+	conn, resp, err := c.dialer.Dial(url, header)
 	if err != nil {
 		if resp != nil {
 			return fmt.Errorf("tts: websocket dial HTTP %d: %w", resp.StatusCode, err)

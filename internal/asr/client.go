@@ -8,12 +8,12 @@
 // Lifecycle:
 //   - Connect to wss://.../api-ws/v1/inference (once)
 //   - For each Transcribe call:
-//     - Send run-task JSON (model, format=pcm, sample_rate=16000)
-//     - Wait for task-started
-//     - Send binary audio chunks (PCM 16-bit, 16kHz, mono)
-//     - Receive result-generated events with sentence.text
-//     - Send finish-task when done
-//     - Wait for task-finished
+//   - Send run-task JSON (model, format=pcm, sample_rate=16000)
+//   - Wait for task-started
+//   - Send binary audio chunks (PCM 16-bit, 16kHz, mono)
+//   - Receive result-generated events with sentence.text
+//   - Send finish-task when done
+//   - Wait for task-finished
 //   - On Close: close the WebSocket connection
 package asr
 
@@ -24,6 +24,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -47,17 +48,28 @@ type Client struct {
 	// most one concurrent writer per connection, so overlapping Transcribe
 	// calls would otherwise race on c.conn.WriteJSON/WriteMessage.
 	reqMu sync.Mutex
+
+	// dialer is the websocket.Dialer used for connecting. It is configured
+	// once at creation time so that proxy settings (from cfg.yml or env vars)
+	// are baked in.
+	dialer *websocket.Dialer
 }
 
 // NewClient creates a new DashScope realtime ASR client.
 // The connection is established lazily on the first Transcribe call.
-func NewClient(wsURL, model, apiKey string, format string, sampleRate int) *Client {
+// proxyFunc is the http.Proxy function used for the WebSocket connection
+// (e.g. config.ProxyFunc(cfg.Proxy)).
+func NewClient(wsURL, model, apiKey string, format string, sampleRate int, proxyFunc func(*http.Request) (*url.URL, error)) *Client {
 	return &Client{
 		wsURL:      wsURL,
 		model:      model,
 		apiKey:     apiKey,
 		format:     format,
 		sampleRate: sampleRate,
+		dialer: &websocket.Dialer{
+			Proxy:            proxyFunc,
+			HandshakeTimeout: 30 * time.Second,
+		},
 	}
 }
 
@@ -287,7 +299,7 @@ func (c *Client) ensureConnectedLocked() error {
 	header := make(http.Header)
 	header.Set("Authorization", "Bearer "+c.apiKey)
 
-	conn, resp, err := websocket.DefaultDialer.Dial(c.wsURL, header)
+	conn, resp, err := c.dialer.Dial(c.wsURL, header)
 	if err != nil {
 		if resp != nil {
 			return fmt.Errorf("asr: websocket dial HTTP %d: %w", resp.StatusCode, err)

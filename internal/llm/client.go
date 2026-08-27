@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -35,7 +36,9 @@ const maxHistoryTurns = 10
 const defaultMaxTokens = 512
 
 // NewClient creates a new online LLM client.
-func NewClient(baseURL, model, apiKey, name string, maxTokens int) *Client {
+// proxyFunc is the http.Proxy function used for HTTP requests
+// (e.g. config.ProxyFunc(cfg.Proxy)).
+func NewClient(baseURL, model, apiKey, name string, maxTokens int, proxyFunc func(*http.Request) (*url.URL, error)) *Client {
 	if name == "" {
 		name = "小冉"
 	}
@@ -57,6 +60,9 @@ func NewClient(baseURL, model, apiKey, name string, maxTokens int) *Client {
 			now.Format("2006年1月2日"), weekdayCN(now.Weekday()), name),
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
+			Transport: &http.Transport{
+				Proxy: proxyFunc,
+			},
 		},
 	}
 }

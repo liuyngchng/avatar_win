@@ -3,6 +3,8 @@ package config
 
 import (
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -15,6 +17,7 @@ type Cfg struct {
 	LLM      LLMConfig    `yaml:"llm"`
 	TTS      TTSConfig    `yaml:"tts"`
 	APIKey   string       `yaml:"api_key"`
+	Proxy    string       `yaml:"proxy"`
 	WakeWord string       `yaml:"wake_word"`
 	Avatar   AvatarConfig `yaml:"avatar"`
 }
@@ -91,4 +94,21 @@ func exeDir() string {
 		return "."
 	}
 	return filepath.Dir(exe)
+}
+
+// ProxyFunc returns an http.Proxy function that respects the following
+// priority, suitable for http.Transport and gorilla/websocket Dialer:
+//
+//  1. cfgProxy (cfg.yml proxy field) — if set, always use this proxy.
+//  2. Environment variables (HTTPS_PROXY / HTTP_PROXY / NO_PROXY) —
+//     standard Go ProxyFromEnvironment.
+//  3. Direct connection — no proxy.
+func ProxyFunc(cfgProxy string) func(*http.Request) (*url.URL, error) {
+	if cfgProxy != "" {
+		u, err := url.Parse(cfgProxy)
+		if err == nil {
+			return http.ProxyURL(u)
+		}
+	}
+	return http.ProxyFromEnvironment
 }

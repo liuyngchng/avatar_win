@@ -38,6 +38,12 @@ tts:
 # 百炼 API Key（从 https://bailian.console.aliyun.com 获取）
 api_key: ""
 
+# HTTP(S) 代理地址（可选）。用于访问外部 API 时代理连接。
+# 支持的格式: http://proxy.example.com:8080
+# 不配置时，自动使用 HTTPS_PROXY / HTTP_PROXY 环境变量；
+# 环境变量也未设置时，使用直连。
+# proxy: "http://proxy.example.com:8080"
+
 # 唤醒词（可自定义，默认"小冉"）
 wake_word: "小冉"
 

@@ -97,7 +97,7 @@ func main() {
 		if cfg.LLM.URL == "" {
 			log.Fatalf("main: LLM init failed: cfg.yml llm.url is required")
 		}
-		llmClient = llm.NewClient(cfg.LLM.URL, cfg.LLM.Model, cfg.APIKey, cfg.LLM.Name, cfg.LLM.MaxTokens)
+		llmClient = llm.NewClient(cfg.LLM.URL, cfg.LLM.Model, cfg.APIKey, cfg.LLM.Name, cfg.LLM.MaxTokens, config.ProxyFunc(cfg.Proxy))
 		defer llmClient.Close()
 		log.Printf("main: [3/5] LLM endpoint=%s (model=%s)", cfg.LLM.URL, cfg.LLM.Model)
 
