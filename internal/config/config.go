@@ -13,13 +13,14 @@ import (
 
 // Cfg holds all API configuration for the avatar services.
 type Cfg struct {
-	ASR      ASRConfig    `yaml:"asr"`
-	LLM      LLMConfig    `yaml:"llm"`
-	TTS      TTSConfig    `yaml:"tts"`
-	APIKey   string       `yaml:"api_key"`
-	Proxy    string       `yaml:"proxy"`
-	WakeWord string       `yaml:"wake_word"`
-	Avatar   AvatarConfig `yaml:"avatar"`
+	ASR           ASRConfig    `yaml:"asr"`
+	LLM           LLMConfig    `yaml:"llm"`
+	TTS           TTSConfig    `yaml:"tts"`
+	APIKey        string       `yaml:"api_key"`
+	Proxy         string       `yaml:"proxy"`
+	ProxyDisabled bool         `yaml:"proxy_disabled"`
+	WakeWord      string       `yaml:"wake_word"`
+	Avatar        AvatarConfig `yaml:"avatar"`
 }
 
 // ASRConfig holds the speech recognition configuration (online API only;
@@ -99,11 +100,15 @@ func exeDir() string {
 // ProxyFunc returns an http.Proxy function that respects the following
 // priority, suitable for http.Transport and gorilla/websocket Dialer:
 //
-//  1. cfgProxy (cfg.yml proxy field) — if set, always use this proxy.
-//  2. Environment variables (HTTPS_PROXY / HTTP_PROXY / NO_PROXY) —
+//  1. proxy_disabled: true — force direct connection, ignore env vars and cfg.
+//  2. cfgProxy (cfg.yml proxy field) — if set, always use this proxy.
+//  3. Environment variables (HTTPS_PROXY / HTTP_PROXY / NO_PROXY) —
 //     standard Go ProxyFromEnvironment.
-//  3. Direct connection — no proxy.
-func ProxyFunc(cfgProxy string) func(*http.Request) (*url.URL, error) {
+//  4. Direct connection — no proxy.
+func ProxyFunc(cfgProxy string, disabled bool) func(*http.Request) (*url.URL, error) {
+	if disabled {
+		return func(*http.Request) (*url.URL, error) { return nil, nil }
+	}
 	if cfgProxy != "" {
 		u, err := url.Parse(cfgProxy)
 		if err == nil {
@@ -111,4 +116,23 @@ func ProxyFunc(cfgProxy string) func(*http.Request) (*url.URL, error) {
 		}
 	}
 	return http.ProxyFromEnvironment
+}
+
+// ProxyDesc returns a human-readable description of the proxy state.
+// Log this at startup so the user knows whether the app is using a proxy.
+func ProxyDesc(cfgProxy string, disabled bool) string {
+	if disabled {
+		return "代理: 已强制关闭 (proxy_disabled=true), 直连"
+	}
+	if cfgProxy != "" {
+		return fmt.Sprintf("代理: %s (cfg.yml proxy)", cfgProxy)
+	}
+	env := os.Getenv("HTTPS_PROXY")
+	if env == "" {
+		env = os.Getenv("HTTP_PROXY")
+	}
+	if env != "" {
+		return fmt.Sprintf("代理: %s (环境变量)", env)
+	}
+	return "代理: 未配置, 直连"
 }

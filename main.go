@@ -60,6 +60,7 @@ func main() {
 		log.Println("main: [1/5] cfg.yml NOT found — running display-only (talking disabled)")
 	} else {
 		log.Println("main: [1/5] config loaded OK")
+		log.Printf("main: %s", config.ProxyDesc(cfg.Proxy, cfg.ProxyDisabled))
 	}
 
 	// Step 2: Create the renderer window FIRST — the user should see the
@@ -97,7 +98,7 @@ func main() {
 		if cfg.LLM.URL == "" {
 			log.Fatalf("main: LLM init failed: cfg.yml llm.url is required")
 		}
-		llmClient = llm.NewClient(cfg.LLM.URL, cfg.LLM.Model, cfg.APIKey, cfg.LLM.Name, cfg.LLM.MaxTokens, config.ProxyFunc(cfg.Proxy))
+		llmClient = llm.NewClient(cfg.LLM.URL, cfg.LLM.Model, cfg.APIKey, cfg.LLM.Name, cfg.LLM.MaxTokens, config.ProxyFunc(cfg.Proxy, cfg.ProxyDisabled))
 		defer llmClient.Close()
 		log.Printf("main: [3/5] LLM endpoint=%s (model=%s)", cfg.LLM.URL, cfg.LLM.Model)
 

@@ -44,6 +44,10 @@ api_key: ""
 # 环境变量也未设置时，使用直连。
 # proxy: "http://proxy.example.com:8080"
 
+# 强制关闭代理（可选）。设为 true 时，无论 cfg.yml 的 proxy 字段还是
+# 环境变量代理，一律直连，不做任何代理。
+# proxy_disabled: true
+
 # 唤醒词（可自定义，默认"小冉"）
 wake_word: "小冉"
 
