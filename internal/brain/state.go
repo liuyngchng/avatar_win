@@ -19,6 +19,12 @@ const (
 	ModeSpeaking
 	// ModeThinking: processing request (waiting on LLM).
 	ModeThinking
+	// ModeAwaitingUser: avatar just finished speaking and is in the
+	// multi-turn conversation window — waiting for the user to start
+	// talking again. If no speech arrives within the configured timeout,
+	// the state machine returns to ModeIdle and resumes wake-word
+	// listening.
+	ModeAwaitingUser
 )
 
 func (m Mode) String() string {
@@ -31,6 +37,8 @@ func (m Mode) String() string {
 		return "speaking"
 	case ModeThinking:
 		return "thinking"
+	case ModeAwaitingUser:
+		return "awaiting_user"
 	}
 	return "unknown"
 }

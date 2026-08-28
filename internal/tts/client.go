@@ -22,7 +22,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -30,6 +29,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/logging"
 )
 
 // Client is a WebSocket client for the DashScope Qwen-TTS Realtime API.
@@ -111,7 +111,7 @@ func (c *Client) closeGracefulLocked() {
 	}
 	c.conn.SetWriteDeadline(time.Now().Add(closeGracePeriod))
 	if err := c.conn.WriteJSON(finishEvent); err != nil {
-		log.Printf("tts: session.finish write failed (will close): %v", err)
+		logging.Warnf("tts: session.finish write failed (will close): %v", err)
 	}
 
 	// Read until session.finished or the grace period expires.
@@ -124,7 +124,7 @@ func (c *Client) closeGracefulLocked() {
 		var event map[string]interface{}
 		if json.Unmarshal(msg, &event) == nil {
 			if t, _ := event["type"].(string); t == "session.finished" {
-				log.Printf("tts: session.finished (clean close)")
+				logging.Debugf("tts: session.finished (clean close)")
 				break
 			}
 		}
@@ -176,7 +176,7 @@ func (c *Client) Synthesize(text string, speed float32) (*SynthesizeResult, erro
 		"text":     text,
 	}
 	if err := c.conn.WriteJSON(appendEvent); err != nil {
-		log.Printf("tts: write append failed, reconnecting: %v", err)
+		logging.Warnf("tts: write append failed, reconnecting: %v", err)
 		c.closeLocked()
 		if err2 := c.ensureConnectedLocked(); err2 != nil {
 			c.mu.Unlock()
@@ -187,7 +187,7 @@ func (c *Client) Synthesize(text string, speed float32) (*SynthesizeResult, erro
 			return nil, fmt.Errorf("tts: send input_text_buffer.append: %w", err)
 		}
 	}
-	log.Printf("tts: sent input_text_buffer.append (%d chars)", len([]rune(text)))
+	logging.Debugf("tts: sent input_text_buffer.append (%d chars)", len([]rune(text)))
 
 	// Commit to trigger synthesis.
 	commitEvent := map[string]interface{}{
@@ -198,7 +198,7 @@ func (c *Client) Synthesize(text string, speed float32) (*SynthesizeResult, erro
 		c.mu.Unlock()
 		return nil, fmt.Errorf("tts: send input_text_buffer.commit: %w", err)
 	}
-	log.Printf("tts: sent input_text_buffer.commit")
+	logging.Debugf("tts: sent input_text_buffer.commit")
 
 	// Snapshot the connection and release the lock before blocking on reads.
 	// This prevents one hung synthesis from deadlocking the entire client.
@@ -219,9 +219,9 @@ func (c *Client) Synthesize(text string, speed float32) (*SynthesizeResult, erro
 	}
 
 	dur := float64(len(allSamples)) / float64(c.sampleRate)
-	log.Printf("tts: synthesized %d samples (%.1fs) for %d chars",
+	logging.Debugf("tts: synthesized %d samples (%.1fs) for %d chars",
 		len(allSamples), dur, len([]rune(text)))
-	log.Printf("⏱ [timing] TTS: total=%dms (commit + synth, no handshake)", time.Since(t0).Milliseconds())
+	logging.Debugf("⏱ [timing] TTS: total=%dms (commit + synth, no handshake)", time.Since(t0).Milliseconds())
 
 	return &SynthesizeResult{
 		Samples:    allSamples,
@@ -249,7 +249,7 @@ func (c *Client) ensureConnectedLocked() error {
 		}
 		return fmt.Errorf("tts: websocket dial: %w", err)
 	}
-	log.Printf("tts: connected to %s (%dms)", url, time.Since(t0).Milliseconds())
+	logging.Debugf("tts: connected to %s (%dms)", url, time.Since(t0).Milliseconds())
 
 	// Wait for session.created.
 	_, msg, err := conn.ReadMessage()
@@ -269,7 +269,7 @@ func (c *Client) ensureConnectedLocked() error {
 	}
 	sess, _ := event["session"].(map[string]interface{})
 	sid, _ := sess["id"].(string)
-	log.Printf("tts: session.created id=%s", sid)
+	logging.Debugf("tts: session.created id=%s", sid)
 
 	// Send session.update (commit mode).
 	updateEvent := map[string]interface{}{
@@ -287,7 +287,7 @@ func (c *Client) ensureConnectedLocked() error {
 		conn.Close()
 		return fmt.Errorf("tts: send session.update: %w", err)
 	}
-	log.Printf("tts: sent session.update (voice=%s, mode=commit, format=%s, rate=%d)",
+	logging.Debugf("tts: sent session.update (voice=%s, mode=commit, format=%s, rate=%d)",
 		c.voice, c.format, c.sampleRate)
 
 	// Wait for session.updated.
@@ -312,10 +312,10 @@ func (c *Client) ensureConnectedLocked() error {
 		conn.Close()
 		return fmt.Errorf("tts: expected session.updated, got %q", et)
 	}
-	log.Printf("tts: session.updated")
+	logging.Debugf("tts: session.updated")
 
 	c.conn = conn
-	log.Printf("⏱ [timing] TTS: ws_connect+handshake=%dms", time.Since(t0).Milliseconds())
+	logging.Debugf("⏱ [timing] TTS: ws_connect+handshake=%dms", time.Since(t0).Milliseconds())
 	return nil
 }
 
@@ -332,7 +332,7 @@ func (c *Client) readAudioLoopConn(conn *websocket.Conn, allSamples *[]float32) 
 
 		var event map[string]interface{}
 		if err := json.Unmarshal(msg, &event); err != nil {
-			log.Printf("tts: parse event: %v", err)
+			logging.Errorf("tts: parse event: %v", err)
 			continue
 		}
 
@@ -346,17 +346,17 @@ func (c *Client) readAudioLoopConn(conn *websocket.Conn, allSamples *[]float32) 
 			}
 			raw, err := base64.StdEncoding.DecodeString(deltaB64)
 			if err != nil {
-				log.Printf("tts: decode base64 audio: %v", err)
+				logging.Warnf("tts: decode base64 audio: %v", err)
 				continue
 			}
 			samples := pcmToFloat32(raw)
 			*allSamples = append(*allSamples, samples...)
 
 		case "response.audio.done":
-			log.Printf("tts: response.audio.done")
+			logging.Debugf("tts: response.audio.done")
 
 		case "response.done":
-			log.Printf("tts: response.done")
+			logging.Debugf("tts: response.done")
 			return nil
 
 		case "error":

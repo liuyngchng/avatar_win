@@ -12,14 +12,51 @@
     /* Loading overlay */
     .loading {
       position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
-      color: rgba(255,255,255,0.6); font-size: 18px;
+      color: rgba(255,255,255,0.85); font-size: 20px;
       font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      text-shadow: 0 0 12px rgba(0,0,0,0.6);
+      pointer-events: none;
+    }
+
+    /* Status overlay — shows the digital human's current state
+       (聆听中 / 思考中 / etc.) above the bottom edge. */
+    .status {
+      position: fixed; bottom: 40px; left: 0; right: 0;
+      text-align: center; color: rgba(255,255,255,0.75);
+      font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      font-size: 16px; pointer-events: none;
+      text-shadow: 0 0 8px rgba(0,0,0,0.5);
+      transition: opacity 0.3s;
+    }
+    .status.hidden { opacity: 0; }
+
+    /* Subtitle bar — shows the avatar's reply text while speaking. */
+    .subtitle {
+      position: fixed; bottom: 80px; left: 10%; right: 10%;
+      text-align: center; color: rgba(255,255,255,0.85);
+      font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      font-size: 20px; pointer-events: none;
+      text-shadow: 0 0 8px rgba(0,0,0,0.5);
+      transition: opacity 0.3s;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .subtitle.hidden { opacity: 0; }
+
+    /* Tap hint — shown while idle, invites the user to start. */
+    .tap-hint {
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+      color: rgba(255,255,255,0.3); font-size: 14px; pointer-events: none;
+      font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      text-shadow: 0 0 8px rgba(0,0,0,0.5);
     }
   </style>
 </head>
 <body>
   <canvas id="canvas"></canvas>
-  <div class="loading" id="loading">加载中...</div>
+  <div class="loading" id="loading">正在加载数字人...</div>
+  <div class="tap-hint" id="tapHint" style="display:none">点击屏幕开始对话</div>
+  <div class="subtitle hidden" id="subtitle"></div>
+  <div class="status" id="status"></div>
   
   <!-- All JS loaded locally (no CDN, for air-gapped deployment) -->
   <script type="importmap">
@@ -45,6 +82,7 @@
     let currentEmotion = 'neutral';
     let isSpeaking = false;
     let idleAnimEnabled = true;   // from cfg.yml avatar.idle_animations_enabled
+    let responseText = '';        // the avatar's reply text (shown in subtitle while speaking)
     let idleAnimState = 'resting';  // 'resting' | 'playing'
     let idleRestTimer = 0;          // how long we've been resting
     let idleRestDuration = 0;       // how long to rest before next anim
@@ -173,6 +211,9 @@
       const loader = new GLTFLoader();
       loader.register((parser) => new VRMLoaderPlugin(parser));
 
+      const loadEl = document.getElementById('loading');
+      loadEl.textContent = '正在加载数字人模型...';
+
       const gltf = await loader.loadAsync(url);
       vrm = gltf.userData.vrm;
       VRMUtils.removeUnnecessaryVertices(gltf.scene);
@@ -196,13 +237,16 @@
 
       // Create the animation mixer and preload FBX idle clips.
       idleMixer = new THREE.AnimationMixer(vrm.scene);
+      loadEl.textContent = '正在加载动作动画...';
       idleClips = await preloadIdleClips(vrm);
       idleClipNames = Object.keys(idleClips);
 
       console.log('VRM loaded:', vrm.meta?.metaVersion);
       console.log('Expressions:', Object.keys(vrm.expressionManager?.expressionMap || {}));
       console.log('Idle animations:', idleClipNames);
-      document.getElementById('loading').style.display = 'none';
+      loadEl.style.display = 'none';
+      document.getElementById('tapHint').style.display = 'block';
+      updateStatus();
 
       // Auto-fit the window to the avatar's bounding box so the entire body
       // (including legs) is visible.
@@ -346,6 +390,8 @@
 
       console.log('Placeholder avatar created');
       document.getElementById('loading').style.display = 'none';
+      document.getElementById('tapHint').style.display = 'block';
+      updateStatus();
 
       // Auto-fit the window to the avatar's bounding box.
       setTimeout(fitWindowToAvatar, 100);
@@ -899,6 +945,43 @@
       group.rotation.z = Math.sin(t * 0.7) * 0.01;
     }
 
+    // ─── Status UI ──────────────────────────────────────────
+    // Shows the digital human's current state and the avatar's reply text
+    // as a subtitle overlay while speaking.
+    function updateStatus() {
+      const el = document.getElementById('status');
+      const sub = document.getElementById('subtitle');
+      const hint = document.getElementById('tapHint');
+
+      switch (currentMode) {
+        case 'idle':
+          el.textContent = '';
+          el.classList.add('hidden');
+          sub.classList.add('hidden');
+          hint.style.display = 'block';
+          break;
+        case 'listening':
+          el.textContent = '正在聆听...';
+          el.classList.remove('hidden');
+          sub.classList.add('hidden');
+          hint.style.display = 'none';
+          break;
+        case 'thinking':
+          el.textContent = '正在思考...';
+          el.classList.remove('hidden');
+          sub.classList.add('hidden');
+          hint.style.display = 'none';
+          break;
+        case 'speaking':
+          el.textContent = '';
+          el.classList.add('hidden');
+          sub.textContent = responseText || '';
+          sub.classList.remove('hidden');
+          hint.style.display = 'none';
+          break;
+      }
+    }
+
     // ─── JS Bridge: Receive messages from Go ─────────────────
     // Called by Go via Eval: handleMessage(jsonString)
     window.handleMessage = function(jsonStr) {
@@ -912,6 +995,7 @@
         if (msg.mode) {
           currentMode = msg.mode;
           isSpeaking = msg.isSpeaking || false;
+          responseText = msg.responseText || '';
           if (msg.emotion) currentEmotion = msg.emotion;
           if (typeof msg.idleAnimationsEnabled === 'boolean') {
             idleAnimEnabled = msg.idleAnimationsEnabled;
@@ -922,6 +1006,7 @@
             stopIdleAnimation(true);
             resetToStandingPose();
           }
+          updateStatus();
           applyModeToVRM();
         }
       } catch (e) {

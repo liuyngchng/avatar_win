@@ -21,7 +21,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -29,6 +28,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/logging"
 )
 
 // Client is a WebSocket client for the DashScope realtime ASR API.
@@ -157,7 +157,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 		},
 	}
 	if err := c.conn.WriteJSON(runTask); err != nil {
-		log.Printf("asr: write run-task failed, reconnecting: %v", err)
+		logging.Warnf("asr: write run-task failed, reconnecting: %v", err)
 		c.closeLocked()
 		if err2 := c.ensureConnectedLocked(); err2 != nil {
 			c.mu.Unlock()
@@ -168,7 +168,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 			return "", fmt.Errorf("asr: send run-task: %w", err)
 		}
 	}
-	log.Printf("asr: sent run-task (task=%s, model=%s)", taskID, c.model)
+	logging.Debugf("asr: sent run-task (task=%s, model=%s)", taskID, c.model)
 
 	// Snapshot the connection and release the lock before blocking on reads.
 	conn := c.conn
@@ -202,7 +202,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 
 			var event map[string]interface{}
 			if err := json.Unmarshal(msg, &event); err != nil {
-				log.Printf("asr: parse event: %v", err)
+				logging.Errorf("asr: parse event: %v", err)
 				continue
 			}
 
@@ -211,13 +211,13 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 
 			switch eventName {
 			case "task-started":
-				log.Printf("asr: task-started")
+				logging.Debugf("asr: task-started")
 				taskStarted = true
 				if !audioSent {
 					audioSent = true
 					go func() {
 						if err := c.sendAudio(conn, samples, sampleRate); err != nil {
-							log.Printf("asr: send audio: %v", err)
+							logging.Errorf("asr: send audio: %v", err)
 						}
 						// Send finish-task.
 						finishTask := map[string]interface{}{
@@ -231,9 +231,9 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 							},
 						}
 						if err := conn.WriteJSON(finishTask); err != nil {
-							log.Printf("asr: send finish-task: %v", err)
+							logging.Errorf("asr: send finish-task: %v", err)
 						}
-						log.Printf("asr: sent finish-task")
+						logging.Debugf("asr: sent finish-task")
 					}()
 				}
 
@@ -243,7 +243,6 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 				sentence, _ := output["sentence"].(map[string]interface{})
 				text, _ := sentence["text"].(string)
 				sentenceEnd, _ := sentence["sentence_end"].(bool)
-				log.Printf("asr: result-generated text=%q sentence_end=%v", text, sentenceEnd)
 				if sentenceEnd {
 					if finalText != "" {
 						finalText += " "
@@ -252,7 +251,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 				}
 
 			case "task-finished":
-				log.Printf("asr: task-finished")
+				logging.Debugf("asr: task-finished")
 				return
 
 			case "task-failed":
@@ -261,7 +260,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 				return
 
 			default:
-				log.Printf("asr: unknown event: %s", eventName)
+				logging.Warnf("asr: unknown event: %s", eventName)
 			}
 		}
 	}()
@@ -283,8 +282,8 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 		return "", fmt.Errorf("asr: task never started")
 	}
 
-	log.Printf("asr: final text: %q", finalText)
-	log.Printf("⏱ [timing] ASR: total=%dms (no handshake, send_audio + recv_results)", time.Since(t0).Milliseconds())
+	logging.Infof("asr: final text: %q", finalText)
+	logging.Debugf("⏱ [timing] ASR: total=%dms (no handshake, send_audio + recv_results)", time.Since(t0).Milliseconds())
 	return finalText, nil
 }
 
@@ -307,7 +306,7 @@ func (c *Client) ensureConnectedLocked() error {
 		return fmt.Errorf("asr: websocket dial: %w", err)
 	}
 	c.conn = conn
-	log.Printf("⏱ [timing] ASR: ws_connect=%dms", time.Since(t0).Milliseconds())
+	logging.Debugf("⏱ [timing] ASR: ws_connect=%dms", time.Since(t0).Milliseconds())
 	return nil
 }
 
@@ -338,7 +337,7 @@ func (c *Client) sendAudio(conn *websocket.Conn, samples []float32, sampleRate i
 		// input and uses finish-task to delimit the end of the audio.
 	}
 
-	log.Printf("asr: sent %d bytes of PCM audio in %d-byte chunks (fast-forward)", len(pcm), chunkSize)
+	logging.Debugf("asr: sent %d bytes of PCM audio in %d-byte chunks (fast-forward)", len(pcm), chunkSize)
 	return nil
 }
 

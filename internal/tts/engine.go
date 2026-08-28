@@ -6,12 +6,12 @@ package tts
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/logging"
 )
 
 // Engine wraps the sherpa-onnx offline TTS engine.
@@ -81,7 +81,7 @@ func NewOfflineEngine(modelDir string) (Synthesizer, error) {
 	}
 
 	sr := tts.SampleRate()
-	log.Printf("tts: offline engine created, sample_rate=%d, num_threads=%d", sr, numThreads)
+	logging.Infof("tts: offline engine created, sample_rate=%d, num_threads=%d", sr, numThreads)
 
 	return &Engine{
 		tts:        tts,
@@ -105,7 +105,7 @@ func (e *Engine) Synthesize(text string, speed float32) (*SynthesizeResult, erro
 	}
 
 	dur := float64(len(audio.Samples)) / float64(audio.SampleRate)
-	log.Printf("tts: offline synthesized %d samples (%.1fs) for %d chars",
+	logging.Debugf("tts: offline synthesized %d samples (%.1fs) for %d chars",
 		len(audio.Samples), dur, len([]rune(text)))
 
 	return &SynthesizeResult{

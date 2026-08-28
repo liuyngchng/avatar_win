@@ -6,12 +6,12 @@ package asr
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/logging"
 )
 
 // Engine wraps the sherpa-onnx offline ASR engine (SenseVoiceSmall).
@@ -76,7 +76,7 @@ func NewOfflineEngine(modelDir string) (Transcriber, error) {
 		return nil, fmt.Errorf("asr: failed to create recognizer (check model paths)")
 	}
 
-	log.Printf("asr: offline engine created, num_threads=%d", numThreads)
+	logging.Infof("asr: offline engine created, num_threads=%d", numThreads)
 
 	return &Engine{
 		recognizer: recognizer,
@@ -108,7 +108,7 @@ func (e *Engine) Transcribe(samples []float32, sampleRate int) (string, error) {
 		return "", fmt.Errorf("asr: no result")
 	}
 
-	log.Printf("asr: offline decoded %d samples → text=%q, lang=%s, emotion=%s",
+	logging.Debugf("asr: offline decoded %d samples → text=%q, lang=%s, emotion=%s",
 		len(samples), r.Text, r.Lang, r.Emotion)
 
 	return r.Text, nil

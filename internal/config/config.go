@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,6 +22,14 @@ type Cfg struct {
 	ProxyDisabled bool         `yaml:"proxy_disabled"`
 	WakeWord      string       `yaml:"wake_word"`
 	Avatar        AvatarConfig `yaml:"avatar"`
+	Log           LogConfig    `yaml:"log"`
+}
+
+// LogConfig holds the logging configuration.
+type LogConfig struct {
+	// Level sets the global log verbosity. One of "debug", "info",
+	// "warn", "error". Unknown or empty values are treated as "info".
+	Level string `yaml:"level"`
 }
 
 // ASRConfig holds the speech recognition configuration (online API only;
@@ -60,12 +69,31 @@ type AvatarConfig struct {
 	// A pointer is used so that an absent key defaults to enabled (true)
 	// rather than Go's zero value (false).
 	IdleAnimationsEnabled *bool `yaml:"idle_animations_enabled"`
+
+	// ConversationIdleMs is the window (in milliseconds) the avatar waits
+	// for the user to start speaking again after finishing a reply. While
+	// the window is open, the avatar runs in multi-turn mode: VAD-detected
+	// speech starts a new turn directly, without requiring the wake word.
+	// If the window expires with no speech, the avatar returns to idle and
+	// the wake word is required to start a new conversation.
+	//
+	// 0 or negative means "use the default" (3000ms).
+	ConversationIdleMs int `yaml:"conversation_idle_ms"`
 }
 
 // IdleAnimations reports whether idle animations are enabled, defaulting
 // to true when the key is absent from cfg.yml.
 func (a AvatarConfig) IdleAnimations() bool {
 	return a.IdleAnimationsEnabled == nil || *a.IdleAnimationsEnabled
+}
+
+// ConversationIdle returns the configured conversation idle timeout,
+// falling back to 3 seconds when unset or non-positive.
+func (a AvatarConfig) ConversationIdle() time.Duration {
+	if a.ConversationIdleMs <= 0 {
+		return 3 * time.Second
+	}
+	return time.Duration(a.ConversationIdleMs) * time.Millisecond
 }
 
 // Load reads cfg.yml from the same directory as the executable.

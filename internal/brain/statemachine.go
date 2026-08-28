@@ -1,7 +1,6 @@
 package brain
 
 import (
-	"log"
 	"math"
 	"strings"
 	"sync"
@@ -11,6 +10,7 @@ import (
 	"github.com/liuyngchng/avatar-desktop-x64/internal/asr"
 	"github.com/liuyngchng/avatar-desktop-x64/internal/audio"
 	"github.com/liuyngchng/avatar-desktop-x64/internal/llm"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/logging"
 	"github.com/liuyngchng/avatar-desktop-x64/internal/tts"
 
 	"github.com/ebitengine/oto/v3"
@@ -29,6 +29,13 @@ type Event struct {
 //
 // Tapping while the avatar is speaking interrupts the current turn and
 // starts a new one immediately.
+//
+// When the user activates the avatar (via wake word or tap), the state
+// machine enters multi-turn mode: after each reply it stays in
+// ModeAwaitingUser for conversationIdle (default 3s), and VAD-detected
+// speech during that window starts a new turn without requiring the wake
+// word again. If the window expires with no speech, the FSM falls back
+// to ModeIdle and the wake-word detector resumes.
 type StateMachine struct {
 	state        State
 	stateChanges chan State
@@ -45,11 +52,25 @@ type StateMachine struct {
 	generation int64        // incremented on each tap; used to detect stale pipelines
 	cancel     chan struct{} // closed when the current pipeline should abort
 
+	// inConversation is true while the FSM is in the multi-turn window
+	// (after the user activated the avatar and before the idle timeout).
+	// Guarded by mu.
+	inConversation bool
+
+	// conversationIdle is how long the FSM waits, after the avatar
+	// finishes speaking, for the user to start a new turn before falling
+	// back to wake-word mode.
+	conversationIdle time.Duration
+
 	// wakeWordConfig is the wake word from cfg.yml (default "小冉").
 	wakeWordConfig string
 	// wakeDetector is the background wake-word listener, active while idle.
 	// Guarded by mu.
 	wakeDetector *wakeWordDetector
+
+	// conversationListener is the multi-turn VAD listener, active while
+	// inConversation is true. Guarded by mu.
+	conversationListener *conversationListener
 }
 
 // NewStateMachine creates a state machine in ModeIdle.
@@ -61,23 +82,28 @@ func NewStateMachine(
 	recorder audio.Recorder,
 	idleAnimationsEnabled bool,
 	wakeWord string,
+	conversationIdle time.Duration,
 ) *StateMachine {
+	if conversationIdle <= 0 {
+		conversationIdle = 3 * time.Second
+	}
 	sm := &StateMachine{
 		state: State{
 			Mode:                  ModeIdle,
 			Emotion:               EmotionNeutral,
 			IdleAnimationsEnabled: idleAnimationsEnabled,
 		},
-		stateChanges:  make(chan State, 16),
-		events:        make(chan Event, 16),
-		visemes:       make(chan VisemeEvent, 64),
-		ttsClient:     ttsClient,
-		asrClient:     asrClient,
-		llmClient:     llmClient,
-		audioPlayer:   audioPlayer,
-		recorder:      recorder,
-		cancel:        make(chan struct{}),
-		wakeWordConfig: wakeWord,
+		stateChanges:    make(chan State, 16),
+		events:          make(chan Event, 16),
+		visemes:         make(chan VisemeEvent, 64),
+		ttsClient:       ttsClient,
+		asrClient:       asrClient,
+		llmClient:       llmClient,
+		audioPlayer:     audioPlayer,
+		recorder:        recorder,
+		cancel:          make(chan struct{}),
+		wakeWordConfig:  wakeWord,
+		conversationIdle: conversationIdle,
 	}
 	// Start the wake word detector in the background. It will only activate
 	// when the state machine is idle and API clients are initialized.
@@ -130,12 +156,12 @@ func (sm *StateMachine) emit() {
 
 func (sm *StateMachine) handleEvent(ev Event) {
 	switch ev.Type {
-	case "tap", "wake_detected":
+	case "tap", "wake_detected", "speech_detected":
 		// If no API config was loaded (nil clients), the avatar can't talk.
 		// Log a clear error and return to idle instead of crashing on a
 		// nil-pointer dereference deep in the pipeline.
 		if sm.asrClient == nil || sm.llmClient == nil || sm.ttsClient == nil {
-			log.Printf("state: event=%s → CANNOT TALK: no cfg.yml / API clients not initialized (asr=%v llm=%v tts=%v). "+
+			logging.Errorf("state: event=%s → CANNOT TALK: no cfg.yml / API clients not initialized (asr=%v llm=%v tts=%v). "+
 				"Create cfg.yml next to the exe with asr/llm/tts/api_key to enable talking.",
 				ev.Type, sm.asrClient != nil, sm.llmClient != nil, sm.ttsClient != nil)
 			sm.setState(ModeIdle, EmotionNeutral, "")
@@ -145,8 +171,15 @@ func (sm *StateMachine) handleEvent(ev Event) {
 
 		sm.mu.Lock()
 
-		// Stop the wake word detector while we're busy.
+		// Stop both background listeners before the pipeline takes the mic.
 		sm.cancelWakeDetectorLocked()
+		sm.cancelConversationListenerLocked()
+
+		// Activate multi-turn mode. Any tap or wake word keeps the
+		// conversation window open across turns; speech_detected is
+		// emitted from inside an already-open window, so this is a no-op
+		// for that branch but harmless.
+		sm.inConversation = true
 
 		// Increment generation so any running pipeline knows it's stale.
 		sm.generation++
@@ -156,9 +189,9 @@ func (sm *StateMachine) handleEvent(ev Event) {
 			// Interrupt the current pipeline.
 			close(sm.cancel)
 			sm.cancel = make(chan struct{})
-			log.Printf("state: event=%s → interrupting current turn (gen=%d → %d)", ev.Type, gen-1, gen)
+			logging.Debugf("state: event=%s → interrupting current turn (gen=%d → %d)", ev.Type, gen-1, gen)
 		} else {
-			log.Printf("state: event=%s → listening (gen=%d)", ev.Type, gen)
+			logging.Infof("state: event=%s → listening (gen=%d)", ev.Type, gen)
 		}
 
 		sm.busy = true
@@ -181,18 +214,14 @@ func (sm *StateMachine) setState(mode Mode, emotion Emotion, responseText string
 	defer sm.mu.Unlock()
 	sm.state.Mode = mode
 	sm.state.Emotion = emotion
-	if responseText != "" {
-		sm.state.ResponseText = responseText
-	}
+	sm.state.ResponseText = responseText
 }
 
 // setStateLocked is like setState but the caller must already hold sm.mu.
 func (sm *StateMachine) setStateLocked(mode Mode, emotion Emotion, responseText string) {
 	sm.state.Mode = mode
 	sm.state.Emotion = emotion
-	if responseText != "" {
-		sm.state.ResponseText = responseText
-	}
+	sm.state.ResponseText = responseText
 }
 
 // pipeline runs a full conversation turn:
@@ -217,9 +246,19 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 		sm.mu.Lock()
 		if sm.generation == gen {
 			sm.busy = false
-			// Restart the wake word detector when back to idle.
-			if sm.state.Mode == ModeIdle || sm.state.Mode == ModeThinking {
-				sm.setStateLocked(ModeIdle, EmotionNeutral, "")
+			if sm.inConversation {
+				// Multi-turn window: stay open for VAD-driven follow-ups.
+				// The conversation listener will end the window itself if
+				// no speech arrives within conversationIdle.
+				if sm.state.Mode != ModeAwaitingUser {
+					sm.setStateLocked(ModeAwaitingUser, EmotionNeutral, "")
+				}
+				sm.startConversationListenerLocked()
+			} else {
+				// Single-turn: back to wake-word listening.
+				if sm.state.Mode == ModeIdle || sm.state.Mode == ModeThinking {
+					sm.setStateLocked(ModeIdle, EmotionNeutral, "")
+				}
 				sm.startWakeWordDetectorLocked()
 			}
 		}
@@ -247,23 +286,23 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	if preExistingText != "" {
 		// Wake word + command path: no recording or ASR needed.
 		userText = preExistingText
-		log.Printf("state: user said %q (from wake word, gen=%d)", userText, gen)
+		logging.Infof("state: user said %q (from wake word, gen=%d)", userText, gen)
 	} else {
 		// 1. Record until silence (simple energy-based VAD).
 		tRecStart = time.Now() // ⏱ recording start
 		samples := sm.recordWithVAD(cancel)
 		tRecEnd = time.Now() // ⏱ recording end
 		if canceled() {
-			log.Printf("state: canceled after recording (gen=%d)", gen)
+			logging.Debugf("state: canceled after recording (gen=%d)", gen)
 			return
 		}
 		if len(samples) == 0 {
-			log.Printf("state: no speech detected (gen=%d)", gen)
+			logging.Infof("state: no speech detected (gen=%d)", gen)
 			sm.setState(ModeIdle, EmotionNeutral, "")
 			sm.emit()
 			return
 		}
-		log.Printf("⏱ [timing] recording: %dms (total elapsed: %dms)", tRecEnd.Sub(tRecStart).Milliseconds(), tRecEnd.Sub(t0).Milliseconds())
+		logging.Debugf("⏱ [timing] recording: %dms (total elapsed: %dms)", tRecEnd.Sub(tRecStart).Milliseconds(), tRecEnd.Sub(t0).Milliseconds())
 
 		// 2. ASR.
 		sm.setState(ModeThinking, EmotionNeutral, "")
@@ -273,18 +312,18 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 		userText, err = sm.asrClient.Transcribe(samples, recorderSampleRate)
 		tASREnd = time.Now() // ⏱ ASR end
 		if canceled() {
-			log.Printf("state: canceled after ASR (gen=%d)", gen)
+			logging.Debugf("state: canceled after ASR (gen=%d)", gen)
 			return
 		}
 		if err != nil {
-			log.Printf("state: ASR failed: %v", err)
+			logging.Errorf("state: ASR failed: %v", err)
 			sm.setState(ModeIdle, EmotionNeutral, "")
 			sm.emit()
 			return
 		}
 		userText = trimSpace(userText)
 		if userText == "" {
-			log.Printf("state: ASR returned empty text")
+			logging.Infof("state: ASR returned empty text")
 			sm.setState(ModeIdle, EmotionNeutral, "")
 			sm.emit()
 			return
@@ -293,15 +332,15 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 		sm.mu.Lock()
 		sm.state.LastUserText = userText
 		sm.mu.Unlock()
-		log.Printf("state: user said %q (gen=%d)", userText, gen)
-		log.Printf("⏱ [timing] ASR: %dms (total elapsed: %dms)", tASREnd.Sub(tASRStart).Milliseconds(), tASREnd.Sub(t0).Milliseconds())
+		logging.Infof("state: user said %q (gen=%d)", userText, gen)
+		logging.Debugf("⏱ [timing] ASR: %dms (total elapsed: %dms)", tASREnd.Sub(tASRStart).Milliseconds(), tASREnd.Sub(t0).Milliseconds())
 	}
 
 	// Re-emit so the frontend shows the recognized text during thinking.
 	sm.emit()
 
 	if canceled() {
-		log.Printf("state: canceled before LLM (gen=%d)", gen)
+		logging.Debugf("state: canceled before LLM (gen=%d)", gen)
 		return
 	}
 
@@ -336,7 +375,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 			}
 			result, err := sm.ttsClient.Synthesize(sentence, 1.0)
 			if err != nil {
-				log.Printf("state: TTS failed for sentence %q: %v", sentence, err)
+				logging.Errorf("state: TTS failed for sentence %q: %v", sentence, err)
 				ttsErrs <- err
 				return
 			}
@@ -381,7 +420,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 		case <-cancel:
 			close(sentenceCh)
 			<-ttsDone
-			log.Printf("state: canceled during LLM (gen=%d)", gen)
+			logging.Debugf("state: canceled during LLM (gen=%d)", gen)
 			return
 		}
 	}
@@ -392,7 +431,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	if utf8.RuneCountInString(remaining) >= 2 {
 		sentenceCh <- remaining
 	} else {
-		log.Printf("state: discarding short sentence tail %q (%d runes)", remaining, utf8.RuneCountInString(remaining))
+		logging.Debugf("state: discarding short sentence tail %q (%d runes)", remaining, utf8.RuneCountInString(remaining))
 	}
 
 	// Close sentenceCh so the TTS goroutine finishes.
@@ -402,7 +441,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	// Check for TTS errors.
 	select {
 	case err := <-ttsErrs:
-		log.Printf("state: TTS failed: %v", err)
+		logging.Errorf("state: TTS failed: %v", err)
 		sm.setState(ModeIdle, EmotionNeutral, "")
 		sm.emit()
 		return
@@ -410,12 +449,12 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	}
 
 	if canceled() {
-		log.Printf("state: canceled after TTS (gen=%d)", gen)
+		logging.Debugf("state: canceled after TTS (gen=%d)", gen)
 		return
 	}
 
 	if len(allSamples) == 0 {
-		log.Printf("state: TTS produced no audio")
+		logging.Warnf("state: TTS produced no audio")
 		sm.setState(ModeIdle, EmotionNeutral, "")
 		sm.emit()
 		return
@@ -437,19 +476,19 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	tLLMEnd := tLLMLastToken
 
 	if llmFirstTokenSet {
-		log.Printf("⏱ [timing] LLM: first_token=%dms, stream_done=%dms (total elapsed: %dms)",
+		logging.Debugf("⏱ [timing] LLM: first_token=%dms, stream_done=%dms (total elapsed: %dms)",
 			tLLMFirstToken.Sub(tLLMStart).Milliseconds(),
 			tLLMEnd.Sub(tLLMStart).Milliseconds(),
 			tLLMEnd.Sub(t0).Milliseconds())
 	} else {
-		log.Printf("⏱ [timing] LLM: stream_done=%dms (total elapsed: %dms)", tLLMEnd.Sub(tLLMStart).Milliseconds(), tLLMEnd.Sub(t0).Milliseconds())
+		logging.Debugf("⏱ [timing] LLM: stream_done=%dms (total elapsed: %dms)", tLLMEnd.Sub(tLLMStart).Milliseconds(), tLLMEnd.Sub(t0).Milliseconds())
 	}
 
-	log.Printf("⏱ [timing] TTS: %dms (overlap with LLM, total elapsed: %dms)", tTTSEnd.Sub(tTTSStart).Milliseconds(), tTTSEnd.Sub(t0).Milliseconds())
+	logging.Debugf("⏱ [timing] TTS: %dms (overlap with LLM, total elapsed: %dms)", tTTSEnd.Sub(tTTSStart).Milliseconds(), tTTSEnd.Sub(t0).Milliseconds())
 
 	// 4. Speak — drive mouth visemes on a fixed rhythm while audio plays.
 	if sm.audioPlayer == nil {
-		log.Printf("state: audio player is nil, skipping playback")
+		logging.Warnf("state: audio player is nil, skipping playback")
 		sm.mu.Lock()
 		sm.state.IsSpeaking = false
 		sm.mu.Unlock()
@@ -467,7 +506,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	tPlayStart := time.Now() // ⏱ playback start
 	player, err := sm.audioPlayer.Play(allSamples)
 	if err != nil {
-		log.Printf("state: audio play error: %v", err)
+		logging.Errorf("state: audio play error: %v", err)
 		sm.mu.Lock()
 		sm.state.IsSpeaking = false
 		sm.mu.Unlock()
@@ -500,7 +539,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	if tLLMEnd.After(tTTSEnd) {
 		overlapEnd = tLLMEnd
 	}
-	log.Printf("⏱ [timing] playback: %dms | TOTAL pipeline: %dms (rec=%.1f%%, asr=%.1f%%, llm+tts overlap=%.1f%%, play=%.1f%%)",
+	logging.Debugf("⏱ [timing] playback: %dms | TOTAL pipeline: %dms (rec=%.1f%%, asr=%.1f%%, llm+tts overlap=%.1f%%, play=%.1f%%)",
 		tPlayEnd.Sub(tPlayStart).Milliseconds(),
 		tPlayEnd.Sub(t0).Milliseconds(),
 		float64(tRecEnd.Sub(tRecStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
@@ -552,14 +591,14 @@ func (sm *StateMachine) speakWithCancel(player *oto.Player, cancel <-chan struct
 	for player.IsPlaying() {
 		select {
 		case <-cancel:
-			log.Printf("state: playback interrupted by user")
+			logging.Debugf("state: playback interrupted by user")
 			player.Pause()
 			return
 		default:
 		}
 
 		if err := player.Err(); err != nil {
-			log.Printf("state: audio play error: %v", err)
+			logging.Errorf("state: audio play error: %v", err)
 			return
 		}
 
@@ -594,7 +633,7 @@ func (sm *StateMachine) speakWithCancel(player *oto.Player, cancel <-chan struct
 func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 	chunks, err := sm.recorder.Start()
 	if err != nil {
-		log.Printf("state: recording failed: %v", err)
+		logging.Errorf("state: recording failed: %v", err)
 		return nil
 	}
 	// The recorder is persistent — Start() returns a fresh subscriber
@@ -615,7 +654,7 @@ func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 	for {
 		select {
 		case <-cancel:
-			log.Printf("state: recording canceled")
+			logging.Debugf("state: recording canceled")
 			return all
 		case chunk, ok := <-chunks:
 			if !ok {
@@ -632,7 +671,7 @@ func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 			rms := rmsOf(chunk)
 			if rms > speechThreshold {
 				if !speaking {
-					log.Printf("state: speech started (rms=%.4f)", rms)
+					logging.Debugf("state: speech started (rms=%.4f)", rms)
 					speaking = true
 				}
 				lastSpeech = time.Now()
@@ -640,13 +679,13 @@ func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 
 			// Stop when speech started and silence persisted long enough.
 			if speaking && time.Since(lastSpeech) >= silenceDuration {
-				log.Printf("state: silence detected, stopping recording")
+				logging.Debugf("state: silence detected, stopping recording")
 				return all
 			}
 
 			// Hard safety cap.
 			if time.Since(start) >= maxDuration {
-				log.Printf("state: max recording duration reached")
+				logging.Debugf("state: max recording duration reached")
 				return all
 			}
 		}

@@ -8,6 +8,17 @@ import (
 	"github.com/liuyngchng/avatar-desktop-x64/internal/config"
 )
 
+// Mode returns a human-readable build mode label: "在线" or "离线".
+func Mode() string { return "在线" }
+
+// Desc returns a human-readable description of the TTS backend.
+func Desc(cfg *config.Cfg) string {
+	if cfg == nil || cfg.TTS.URL == "" {
+		return "在线 TTS (未配置)"
+	}
+	return fmt.Sprintf("在线 TTS: 阿里云 DashScope (model=%s, voice=%s)", cfg.TTS.Model, cfg.TTS.Voice)
+}
+
 // initTTS creates the online TTS client from cfg.yml.
 // The online build requires tts.url to be configured; a missing URL is a
 // hard error rather than a silent fallback.

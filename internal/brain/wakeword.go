@@ -1,9 +1,10 @@
 package brain
 
 import (
-	"log"
 	"strings"
 	"time"
+
+	"github.com/liuyngchng/avatar-desktop-x64/internal/logging"
 )
 
 // wakeWordDetector continuously listens for the wake word in background audio
@@ -74,12 +75,12 @@ func (d *wakeWordDetector) stop() {
 }
 
 func (d *wakeWordDetector) run() {
-	log.Printf("wakeword: listening for %q...", d.wakeWord)
+	logging.Infof("wakeword: listening for %q...", d.wakeWord)
 
 	for {
 		select {
 		case <-d.done:
-			log.Printf("wakeword: stopped")
+			logging.Infof("wakeword: stopped")
 			return
 		default:
 		}
@@ -93,7 +94,7 @@ func (d *wakeWordDetector) run() {
 		// Run ASR on the captured audio to check for the wake word.
 		text, err := d.sm.asrClient.Transcribe(samples, recorderSampleRate)
 		if err != nil {
-			log.Printf("wakeword: ASR failed: %v", err)
+			logging.Errorf("wakeword: ASR failed: %v", err)
 			continue
 		}
 		text = strings.TrimSpace(text)
@@ -101,11 +102,11 @@ func (d *wakeWordDetector) run() {
 			continue
 		}
 
-		log.Printf("wakeword: heard %q", text)
+		logging.Debugf("wakeword: heard %q", text)
 
 		// Check if the text contains the wake word.
 		if containsWakeWord(text, d.wakeWord) {
-			log.Printf("wakeword: WAKE WORD DETECTED in %q", text)
+			logging.Infof("wakeword: WAKE WORD DETECTED in %q", text)
 
 			remainder := extractAfterWakeWord(text, d.wakeWord)
 
@@ -123,7 +124,7 @@ func (d *wakeWordDetector) run() {
 			select {
 			case d.sm.events <- ev:
 			default:
-				log.Printf("wakeword: event channel full, dropping wake_detected")
+				logging.Warnf("wakeword: event channel full, dropping wake_detected")
 			}
 			return
 		}
@@ -135,7 +136,7 @@ func (d *wakeWordDetector) run() {
 func (d *wakeWordDetector) listenForSpeech() []float32 {
 	chunks, err := d.sm.recorder.Start()
 	if err != nil {
-		log.Printf("wakeword: recorder start failed: %v", err)
+		logging.Errorf("wakeword: recorder start failed: %v", err)
 		return nil
 	}
 
@@ -167,20 +168,20 @@ func (d *wakeWordDetector) listenForSpeech() []float32 {
 			rms := rmsOf(chunk)
 			if rms > speechThreshold {
 				if !speaking {
-					log.Printf("wakeword: speech detected (rms=%.4f)", rms)
+					logging.Debugf("wakeword: speech detected (rms=%.4f)", rms)
 					speaking = true
 				}
 				lastSpeech = time.Now()
 			}
 
 			if speaking && time.Since(lastSpeech) >= silenceDuration {
-				log.Printf("wakeword: silence detected, captured %d samples (%.1fs)",
+				logging.Debugf("wakeword: silence detected, captured %d samples (%.1fs)",
 					len(all), float64(len(all))/recorderSampleRate)
 				return all
 			}
 
 			if time.Since(start) >= maxDuration {
-				log.Printf("wakeword: max duration reached (%.1fs)", maxDuration.Seconds())
+				logging.Debugf("wakeword: max duration reached (%.1fs)", maxDuration.Seconds())
 				return all
 			}
 		}

@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+
+	"github.com/liuyngchng/avatar-desktop-x64/internal/logging"
 )
 
 // Init redirects the standard logger to write to avatar.log in the
@@ -29,6 +31,6 @@ func Init() (*os.File, error) {
 	// and io.MultiWriter stops at the first failing writer, silently
 	// discarding all file output too. Writing to the file alone avoids that.
 	log.SetOutput(f)
-	log.Printf("logfile: logging to %s", path)
+	logging.Infof("logfile: logging to %s", path)
 	return f, nil
 }

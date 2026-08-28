@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
-	"log"
 	"net"
 	"net/http"
 	"runtime"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/jchv/go-webview2"
 	"github.com/liuyngchng/avatar-desktop-x64/internal/brain"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/logging"
 )
 
 type webviewRenderer struct {
@@ -45,7 +45,7 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 	go srv.Serve(listener)
 
 	url := "http://127.0.0.1:" + strconv.Itoa(port) + "/index.html"
-	log.Printf("renderer: serving at %s", url)
+	logging.Infof("renderer: serving at %s", url)
 
 	r := &webviewRenderer{
 		events: make(chan brain.Event, 16),
@@ -87,7 +87,7 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 		// Make the WebView2 control background transparent so the
 		// Windows desktop shows through behind the VRM avatar.
 		if err := w.SetDefaultBackgroundColor(0, 0, 0, 0); err != nil {
-			log.Printf("renderer: transparent bg warning: %v", err)
+			logging.Warnf("renderer: transparent bg warning: %v", err)
 		}
 
 		r.webview = w
@@ -96,23 +96,23 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 		if err := w.Bind("goBridge_sendEvent", func(jsonStr string) {
 			var ev brain.Event
 			if err := json.Unmarshal([]byte(jsonStr), &ev); err != nil {
-				log.Printf("renderer: bad event from JS: %v", err)
+				logging.Errorf("renderer: bad event from JS: %v", err)
 				return
 			}
 			select {
 			case r.events <- ev:
 			default:
-				log.Printf("renderer: dropping event (channel full): %s", ev.Type)
+				logging.Warnf("renderer: dropping event (channel full): %s", ev.Type)
 			}
 		}); err != nil {
-			log.Printf("renderer: bind warning: %v", err)
+			logging.Warnf("renderer: bind warning: %v", err)
 		}
 
 		// Bind goBridge_moveWindow so JS can drag the borderless window.
 		if err := w.Bind("goBridge_moveWindow", func(dx, dy int) {
 			w.MoveBy(dx, dy)
 		}); err != nil {
-			log.Printf("renderer: bind moveWindow warning: %v", err)
+			logging.Warnf("renderer: bind moveWindow warning: %v", err)
 		}
 
 		// Bind goBridge_setWindowSize so JS can resize + bottom-right the window.
@@ -123,7 +123,7 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 			w.SetSize(width, height, webview2.HintNone)
 			w.BottomRight()
 		}); err != nil {
-			log.Printf("renderer: bind setWindowSize warning: %v", err)
+			logging.Warnf("renderer: bind setWindowSize warning: %v", err)
 		}
 
 		w.Navigate(url)
@@ -131,9 +131,9 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 
 		// Run the Windows message pump. This blocks until Destroy() is
 		// called (which posts WM_QUIT).
-		log.Println("renderer: entering message loop")
+		logging.Infof("renderer: entering message loop")
 		w.Run()
-		log.Println("renderer: message loop exited")
+		logging.Infof("renderer: message loop exited")
 
 		// The window was destroyed (user clicked X, or programmatic
 		// Destroy()).  Signal that the renderer is done so the main
@@ -152,7 +152,7 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 func (r *webviewRenderer) SendMessage(msg any) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("renderer: marshal error: %v", err)
+		logging.Errorf("renderer: marshal error: %v", err)
 		return
 	}
 	js := "if(window.handleMessage)handleMessage(" + strconv.Quote(string(data)) + ")"
