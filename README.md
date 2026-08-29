@@ -155,6 +155,22 @@ go build -o avatar-desktop-x64.exe .
 powershell -ExecutionPolicy Bypass -File build.ps1 release
 ```
 
+> **为什么双击 exe 会闪现黑色终端？**
+> Go 编译的可执行文件默认链接为「控制台子系统」，双击运行时 Windows 会先弹出一个黑色 cmd 窗口。本项目 `build.ps1` 通过 `-ldflags "-H windowsgui"` 把 exe 编成「GUI 子系统」，所以 build.ps1 的产物直接双击就是数字人窗口、没有黑框。
+> 如果直接用 `go build` 开发调试，想让产物同样不弹黑色终端，可执行以下一条命令（写入 Go 用户配置，永久生效）：
+>
+> ```powershell
+> go env -w GOFLAGS=-ldflags=-H=windowsgui
+> ```
+>
+> 之后这台机器上 `go build` 产生的所有 exe 都默认为窗口程序。撤销：
+>
+> ```powershell
+> go env -u GOFLAGS
+> ```
+>
+> 注意：该设置是**机器级**的，会影响本机所有 Go 项目的 `go build` 产物。
+
 在线版产物：`dist/avatar-desktop-x64.zip`
 - `avatar-desktop-x64.exe`（约 45 MB）
 - `cfg.yml`（配置模板）
