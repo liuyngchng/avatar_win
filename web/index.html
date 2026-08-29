@@ -41,20 +41,11 @@
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .subtitle.hidden { opacity: 0; }
-
-    /* Tap hint — shown while idle, invites the user to start. */
-    .tap-hint {
-      position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
-      color: rgba(255,255,255,0.3); font-size: 14px; pointer-events: none;
-      font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
-      text-shadow: 0 0 8px rgba(0,0,0,0.5);
-    }
   </style>
 </head>
 <body>
   <canvas id="canvas"></canvas>
   <div class="loading" id="loading">正在加载数字人...</div>
-  <div class="tap-hint" id="tapHint" style="display:none">点击屏幕开始对话</div>
   <div class="subtitle hidden" id="subtitle"></div>
   <div class="status" id="status"></div>
   
@@ -245,7 +236,6 @@
       console.log('Expressions:', Object.keys(vrm.expressionManager?.expressionMap || {}));
       console.log('Idle animations:', idleClipNames);
       loadEl.style.display = 'none';
-      document.getElementById('tapHint').style.display = 'block';
       updateStatus();
 
       // Auto-fit the window to the avatar's bounding box so the entire body
@@ -390,7 +380,6 @@
 
       console.log('Placeholder avatar created');
       document.getElementById('loading').style.display = 'none';
-      document.getElementById('tapHint').style.display = 'block';
       updateStatus();
 
       // Auto-fit the window to the avatar's bounding box.
@@ -951,33 +940,28 @@
     function updateStatus() {
       const el = document.getElementById('status');
       const sub = document.getElementById('subtitle');
-      const hint = document.getElementById('tapHint');
 
       switch (currentMode) {
         case 'idle':
           el.textContent = '';
           el.classList.add('hidden');
           sub.classList.add('hidden');
-          hint.style.display = 'block';
           break;
         case 'listening':
           el.textContent = '正在聆听...';
           el.classList.remove('hidden');
           sub.classList.add('hidden');
-          hint.style.display = 'none';
           break;
         case 'thinking':
           el.textContent = '正在思考...';
           el.classList.remove('hidden');
           sub.classList.add('hidden');
-          hint.style.display = 'none';
           break;
         case 'speaking':
           el.textContent = '';
           el.classList.add('hidden');
           sub.textContent = responseText || '';
           sub.classList.remove('hidden');
-          hint.style.display = 'none';
           break;
       }
     }

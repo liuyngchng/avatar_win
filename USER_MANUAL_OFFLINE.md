@@ -2,7 +2,7 @@
 
 ## 一、这是什么
 
-Avatar Desktop 离线版是一款运行在 Windows 大屏/PC 上的 **3D 数字人问答应用**。用户说唤醒词「小冉」、点击屏幕或按空格键，对着麦克风说话，数字人会：
+Avatar Desktop 离线版是一款运行在 Windows 大屏/PC 上的 **3D 数字人问答应用**。用户说唤醒词「小然」、点击屏幕或按空格键，对着麦克风说话，数字人会：
 
 1. 听你说的话（语音识别，**本地模型，无需联网**）
 2. 理解并生成回答（大模型对话，**需要联网**）
@@ -90,11 +90,11 @@ llm:                              # 大模型对话（生成回答）—— 必�
   url: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
   model: "qwen-plus"              # 对话模型名
   max_tokens: 512
-  name: "小冉"                    # 数字人名字
+  name: "小然"                    # 数字人名字
 
 api_key: "sk-你的百炼APIKey"      # 百炼 API Key —— 必须填写
 
-wake_word: "小冉"                 # 唤醒词（可选，默认"小冉"）
+wake_word: "小然"                 # 唤醒词（可选，默认"小然"）
 
 avatar:
   idle_animations_enabled: true   # idle 时是否随机播放动作动画
@@ -117,11 +117,11 @@ llm:
   url: "https://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
   model: "qwen-plus"
   max_tokens: 512
-  name: "小冉"
+  name: "小然"
 
 api_key: "sk-xxxxxxxxxxxx"
 
-wake_word: "小冉"
+wake_word: "小然"
 
 avatar:
   idle_animations_enabled: true
@@ -138,8 +138,8 @@ avatar:
 #### 方式一：唤醒词（推荐）
 
 1. 启动后数字人进入待机状态，**持续后台监听**。
-2. 直接说 **「小冉」** 唤醒数字人。
-3. 唤醒后可以紧接着说出指令，例如「小冉，今天天气怎么样？」
+2. 直接说 **「小然」** 唤醒数字人。
+3. 唤醒后可以紧接着说出指令，例如「小然，今天天气怎么样？」
 4. 数字人会识别你的话，思考后语音回答。
 
 #### 方式二：手动触发
@@ -162,9 +162,9 @@ avatar:
 
 程序会记住最近 **10 轮**对话上下文。你可以连续追问，无需每句都说唤醒词。例如：
 
-> 你：「小冉，介绍一下你自己」
-> 数字人：「我叫小冉，是一个数字人助手…」
-> 你：「你今年多大了？」（无需再说"小冉"）
+> 你：「小然，介绍一下你自己」
+> 数字人：「我叫小然，是一个数字人助手…」
+> 你：「你今年多大了？」（无需再说"小然"）
 > 数字人：「…」
 
 ### 移动与旋转视角

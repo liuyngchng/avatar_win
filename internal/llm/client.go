@@ -41,7 +41,7 @@ const defaultMaxTokens = 512
 // (e.g. config.ProxyFunc(cfg.Proxy)).
 func NewClient(baseURL, model, apiKey, name string, maxTokens int, proxyFunc func(*http.Request) (*url.URL, error)) *Client {
 	if name == "" {
-		name = "小冉"
+		name = "小然"
 	}
 	if maxTokens <= 0 {
 		maxTokens = defaultMaxTokens

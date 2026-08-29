@@ -281,7 +281,7 @@ llm:
   url: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
   model: "qwen-plus"
   max_tokens: 512
-  name: "小冉"           # 数字人名字（写入系统提示词）
+  name: "小然"           # 数字人名字（写入系统提示词）
 
 tts:
   url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
@@ -292,7 +292,7 @@ tts:
 
 api_key: "your-api-key"
 
-wake_word: "小冉"         # 唤醒词（可自定义）
+wake_word: "小然"         # 唤醒词（可自定义）
 
 avatar:
   idle_animations_enabled: true   # idle 时是否随机播放动作动画
@@ -303,7 +303,7 @@ avatar:
 ## 使用
 
 1. 双击 `avatar-desktop-x64.exe`
-2. **唤醒词**：直接说「小冉」即可唤醒对话（默认开启），唤醒后可以接着说指令
+2. **唤醒词**：直接说「小然」即可唤醒对话（默认开启），唤醒后可以接着说指令
 3. **手动触发**：点击屏幕 / 按空格 / 回车，进入聆听状态后说话
 4. 说话 → ASR 识别 → LLM 回复 → TTS 语音 + 口型动画
 

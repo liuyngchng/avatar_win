@@ -13,7 +13,7 @@ import (
 //
 // When the wake word is detected, the detector stops itself and the state
 // machine starts a full conversation pipeline. If the user said additional
-// words after the wake word (e.g. "小冉，今天天气怎么样？"), those words are
+// words after the wake word (e.g. "小然，今天天气怎么样？"), those words are
 // passed through so the pipeline can skip recording + ASR and go straight to
 // the LLM.
 type wakeWordDetector struct {
@@ -33,7 +33,7 @@ func (sm *StateMachine) startWakeWordDetectorLocked() {
 		return
 	}
 
-	wakeWord := "小冉"
+	wakeWord := "小然"
 	if sm.wakeWordConfig != "" {
 		wakeWord = sm.wakeWordConfig
 	}
@@ -193,15 +193,40 @@ func containsWakeWord(text, wakeWord string) bool {
 	return strings.Contains(text, wakeWord)
 }
 
-// extractAfterWakeWord returns the text after the wake word, trimmed.
-// Common punctuation immediately after the wake word is stripped.
-// Example: "小冉，今天天气怎么样？" → "今天天气怎么样？"
+// extractAfterWakeWord returns the command text after the wake word,
+// trimmed.  A bare name call (no real command) yields "" so the leftover
+// name is never sent to the LLM as a meaningless instruction.
+//
+// Rules, in order:
+//  1. Strip leading punctuation/spaces right after the name
+//     ("小然，今天..." → "今天...").
+//  2. If nothing remains → bare call → "" ("小然").
+//  3. If the tail is only vocative particles → bare call → ""
+//     ("小然呀" / "小然啊" / "小然嘛"...).
+//  4. If the tail repeats the name → bare call → "" ("小然小然。"),
+//     unless a real command follows ("小然，小然是谁" stays intact).
+//  5. Otherwise return the tail as the command, trailing punctuation and
+//     particles preserved ("小然今天天气怎么样？" → "今天天气怎么样？").
 func extractAfterWakeWord(text, wakeWord string) string {
 	idx := strings.Index(text, wakeWord)
 	if idx < 0 {
 		return ""
 	}
 	remainder := text[idx+len(wakeWord):]
+	// 1. Strip address glue right after the name.
 	remainder = strings.TrimLeft(remainder, "，,。！？!?、 ")
+	// 2. Empty tail — bare call.
+	if remainder == "" {
+		return ""
+	}
+	// 3. Tail is only vocative particles — bare call.
+	if strings.Trim(remainder, "啊呀哇哪呢吗吧哦噢嗯呃诶哈") == "" {
+		return ""
+	}
+	// 4. Tail repeats the name with no command after it.
+	if containsWakeWord(remainder, wakeWord) {
+		return ""
+	}
+	// 5. Real command — keep it, including trailing punctuation.
 	return strings.TrimSpace(remainder)
 }

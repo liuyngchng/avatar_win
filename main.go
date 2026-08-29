@@ -148,7 +148,7 @@ func main() {
 
 	// Step 5: Determine idle animation flag and wake word.
 	idleAnims := true                       // default: enabled
-	wakeWord := ""                          // default: "小冉" (applied in brain)
+	wakeWord := ""                          // default: "小然" (applied in brain)
 	conversationIdle := 3 * time.Second     // default multi-turn idle window
 	if cfg != nil {
 		idleAnims = cfg.Avatar.IdleAnimations()

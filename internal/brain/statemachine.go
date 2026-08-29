@@ -62,7 +62,7 @@ type StateMachine struct {
 	// back to wake-word mode.
 	conversationIdle time.Duration
 
-	// wakeWordConfig is the wake word from cfg.yml (default "小冉").
+	// wakeWordConfig is the wake word from cfg.yml (default "小然").
 	wakeWordConfig string
 	// wakeDetector is the background wake-word listener, active while idle.
 	// Guarded by mu.

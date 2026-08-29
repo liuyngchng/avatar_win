@@ -25,7 +25,7 @@ llm:
   # 每次回复的最大 token 数（可选，默认 512）
   max_tokens: 512
   # 人偶的名字（会写入系统提示词，可自行修改）
-  name: "小冉"
+  name: "小然"
 
 tts:
   # Qwen-TTS Realtime WebSocket API，北京地域
@@ -48,11 +48,15 @@ api_key: ""
 # 环境变量代理，一律直连，不做任何代理。
 # proxy_disabled: true
 
-# 唤醒词（可自定义，默认"小冉"）
-wake_word: "小冉"
+# 唤醒词（可自定义，默认"小然"）
+wake_word: "小然"
 
 # 数字人行为配置
 avatar:
   # idle 时是否随机播放动作动画（T-Pose/Bored/Cross Jumps 等 12 种）
   # 关闭后 idle 时仅保留呼吸 + 微动，不播放动作
   idle_animations_enabled: true
+  # 激活后多轮对话窗口(毫秒):数字人回答完,等待用户继续说话的时长。
+  # 在此窗口内,用户继续说话直接进入下一轮,无需再次唤醒;
+  # 超过该时长仍无语音则退出多轮,需要重新唤醒。<=0 用默认值 3000ms。
+  conversation_idle_ms: 30000
