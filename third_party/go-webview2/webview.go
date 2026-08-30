@@ -57,6 +57,11 @@ type webview struct {
 	m          sync.Mutex
 	bindings   map[string]interface{}
 	dispatchq  []func()
+
+	// borderless remembers whether the window was created as a WS_POPUP
+	// (Borderless option). SetSize must not decorate such windows with a
+	// frame, otherwise a dialog-style border flashes in during resize.
+	borderless bool
 }
 
 type WindowOptions struct {
@@ -276,6 +281,8 @@ func (w *webview) Create(debug bool, window unsafe.Pointer) bool {
 }
 
 func (w *webview) CreateWithOptions(opts WindowOptions) bool {
+	w.borderless = opts.Borderless
+
 	var hinstance windows.Handle
 	_ = windows.GetModuleHandleEx(0, nil, &hinstance)
 
@@ -445,14 +452,20 @@ func (w *webview) SetTitle(title string) {
 }
 
 func (w *webview) SetSize(width int, height int, hints Hint) {
-	index := w32.GWLStyle
-	style := w32.GetWindowLong(w.hwnd, index)
-	if hints == HintFixed {
-		style &^= (w32.WSThickFrame | w32.WSMaximizeBox)
-	} else {
-		style |= (w32.WSThickFrame | w32.WSMaximizeBox)
+	// Borderless windows (WS_POPUP) are deliberately frameless — adding
+	// WS_THICKFRAME/WS_MAXIMIZEBOX would draw a dialog-style border on the
+	// window, and SetWindowLong + SWP_FRAMECHANGED below would make that
+	// border visibly flash on every resize. Decorate only framed windows.
+	if !w.borderless {
+		index := w32.GWLStyle
+		style := w32.GetWindowLong(w.hwnd, index)
+		if hints == HintFixed {
+			style &^= (w32.WSThickFrame | w32.WSMaximizeBox)
+		} else {
+			style |= (w32.WSThickFrame | w32.WSMaximizeBox)
+		}
+		w32.SetWindowLong(w.hwnd, index, style)
 	}
-	w32.SetWindowLong(w.hwnd, index, style)
 
 	if hints == HintMax {
 		w.maxsz.X = int32(width)
@@ -466,7 +479,14 @@ func (w *webview) SetSize(width int, height int, hints Hint) {
 		r.Top = 0
 		r.Right = int32(width)
 		r.Bottom = int32(height)
-		_, _, _ = w32.User32AdjustWindowRect.Call(uintptr(unsafe.Pointer(&r)), w32.WSOverlappedWindow, 0)
+		// Compute the frame geometry with the window's actual style: a
+		// borderless WS_POPUP window has no non-client frame, so using
+		// WS_OVERLAPPEDWINDOW would inflate the window by the frame size.
+		adjustStyle := w32.WSOverlappedWindow
+		if w.borderless {
+			adjustStyle = w32.WSPopup
+		}
+		_, _, _ = w32.User32AdjustWindowRect.Call(uintptr(unsafe.Pointer(&r)), uintptr(adjustStyle), 0)
 		_, _, _ = w32.User32SetWindowPos.Call(
 			w.hwnd, 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top),
 			w32.SWPNoZOrder|w32.SWPNoActivate|w32.SWPNoMove|w32.SWPFrameChanged)
