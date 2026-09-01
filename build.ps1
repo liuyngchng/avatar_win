@@ -365,9 +365,15 @@ if ($SYSO_NEEDS_REGEN) {
 }
 
 try {
-    & go build -trimpath $GO_TAGS "-ldflags=$GO_LDFLAGS" -o $exePath .
+    # garble on Windows defaults to -trimpath, so we drop it from the explicit flags.
+    # garble passes through -tags and -ldflags to go build.
+    $env:GOTOOLCHAIN = "local"
+    $env:GOGARBLE = "github.com/liuyngchng/avatar-desktop-x64"
+    & go run mvdan.cc/garble@v0.14.2 -literals build $GO_TAGS "-ldflags=$GO_LDFLAGS" -o $exePath .
     if ($LASTEXITCODE -ne 0) { throw "go build failed" }
 } finally {
+    Remove-Item Env:\GOTOOLCHAIN -ErrorAction SilentlyContinue
+    Remove-Item Env:\GOGARBLE -ErrorAction SilentlyContinue
     Remove-Item Env:\CGO_ENABLED -ErrorAction SilentlyContinue
     # 恢复 index.html 原文（混淆是构建时的临时操作）
     if (Test-Path $INDEX_HTML_BAK) {

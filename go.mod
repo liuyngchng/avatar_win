@@ -11,6 +11,7 @@ require (
 	github.com/moutend/go-wca v0.3.0
 	github.com/mozillazg/go-pinyin v0.21.0
 	gopkg.in/yaml.v3 v3.0.1
+	mvdan.cc/garble v0.14.2
 )
 
 replace github.com/jchv/go-webview2 => ./third_party/go-webview2
