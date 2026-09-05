@@ -7,13 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/liuyngchng/avatar-desktop-x64/internal/logging"
 )
 
 // Client is an HTTP client for an OpenAI-compatible chat completions API.
@@ -195,7 +194,7 @@ func (c *Client) chat(messages []chatMessage) (string, error) {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 
-	logging.Debugf("llm: POST %s (model=%s)", c.baseURL, c.model)
+	slog.Debug("llm: POST", "url", c.baseURL, "model", c.model)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("llm: http request: %w", err)
@@ -217,8 +216,8 @@ func (c *Client) chat(messages []chatMessage) (string, error) {
 	}
 
 	reply := result.Choices[0].Message.Content
-	logging.Debugf("llm: reply %d chars", len([]rune(reply)))
-	logging.Debugf("⏱ [timing] LLM: total=%dms (api_call + decode)", time.Since(t0).Milliseconds())
+	slog.Debug("llm: reply", "chars", len([]rune(reply)))
+	slog.Debug("⏱ [timing] LLM: total", "ms", time.Since(t0).Milliseconds())
 	return reply, nil
 }
 
@@ -248,13 +247,13 @@ func (c *Client) ChatStream(userText string) <-chan string {
 
 		jsonBody, err := json.Marshal(body)
 		if err != nil {
-			logging.Errorf("llm: marshal stream request: %v", err)
+			slog.Error("llm: marshal stream request", "error", err)
 			return
 		}
 
 		req, err := http.NewRequest("POST", c.baseURL, bytes.NewReader(jsonBody))
 		if err != nil {
-			logging.Errorf("llm: create stream request: %v", err)
+			slog.Error("llm: create stream request", "error", err)
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -263,17 +262,17 @@ func (c *Client) ChatStream(userText string) <-chan string {
 			req.Header.Set("Authorization", "Bearer "+c.apiKey)
 		}
 
-		logging.Debugf("llm: POST %s (model=%s, stream=true)", c.baseURL, c.model)
+		slog.Debug("llm: POST", "url", c.baseURL, "model", c.model, "stream", true)
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			logging.Errorf("llm: stream http request: %v", err)
+			slog.Error("llm: stream http request", "error", err)
 			return
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-			logging.Errorf("llm: stream HTTP %d: %s", resp.StatusCode, string(errBody))
+			slog.Error("llm: stream HTTP error", "status", resp.StatusCode, "body", string(errBody))
 			return
 		}
 
@@ -299,7 +298,7 @@ func (c *Client) ChatStream(userText string) <-chan string {
 
 			var chunk streamChunk
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				logging.Errorf("llm: parse stream chunk: %v", err)
+				slog.Error("llm: parse stream chunk", "error", err)
 				continue
 			}
 
@@ -307,7 +306,7 @@ func (c *Client) ChatStream(userText string) <-chan string {
 				text := chunk.Choices[0].Delta.Content
 				if text != "" {
 					if firstToken {
-						logging.Debugf("⏱ [timing] LLM: first_token=%dms", time.Since(t0).Milliseconds())
+						slog.Debug("⏱ [timing] LLM: first_token", "ms", time.Since(t0).Milliseconds())
 						firstToken = false
 					}
 					totalChars += len([]rune(text))
@@ -317,10 +316,10 @@ func (c *Client) ChatStream(userText string) <-chan string {
 		}
 
 		if err := scanner.Err(); err != nil {
-			logging.Errorf("llm: stream scanner: %v", err)
+			slog.Error("llm: stream scanner", "error", err)
 		}
 
-		logging.Debugf("llm: stream reply %d chars, total=%dms", totalChars, time.Since(t0).Milliseconds())
+		slog.Debug("llm: stream reply", "chars", totalChars, "total_ms", time.Since(t0).Milliseconds())
 	}()
 
 	return ch

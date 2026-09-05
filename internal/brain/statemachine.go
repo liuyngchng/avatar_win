@@ -1,6 +1,7 @@
 package brain
 
 import (
+	"log/slog"
 	"math"
 	"strings"
 	"sync"
@@ -10,7 +11,6 @@ import (
 	"github.com/liuyngchng/avatar-desktop-x64/internal/asr"
 	"github.com/liuyngchng/avatar-desktop-x64/internal/audio"
 	"github.com/liuyngchng/avatar-desktop-x64/internal/llm"
-	"github.com/liuyngchng/avatar-desktop-x64/internal/logging"
 	"github.com/liuyngchng/avatar-desktop-x64/internal/tts"
 
 	"github.com/ebitengine/oto/v3"
@@ -161,9 +161,8 @@ func (sm *StateMachine) handleEvent(ev Event) {
 		// Log a clear error and return to idle instead of crashing on a
 		// nil-pointer dereference deep in the pipeline.
 		if sm.asrClient == nil || sm.llmClient == nil || sm.ttsClient == nil {
-			logging.Errorf("state: event=%s → CANNOT TALK: no cfg.yml / API clients not initialized (asr=%v llm=%v tts=%v). "+
-				"Create cfg.yml next to the exe with asr/llm/tts/api_key to enable talking.",
-				ev.Type, sm.asrClient != nil, sm.llmClient != nil, sm.ttsClient != nil)
+			slog.Error("state: event="+ev.Type+" → CANNOT TALK: no cfg.yml / API clients not initialized",
+				"asr", sm.asrClient != nil, "llm", sm.llmClient != nil, "tts", sm.ttsClient != nil)
 			sm.setState(ModeIdle, EmotionNeutral, "")
 			sm.emit()
 			return
@@ -189,9 +188,9 @@ func (sm *StateMachine) handleEvent(ev Event) {
 			// Interrupt the current pipeline.
 			close(sm.cancel)
 			sm.cancel = make(chan struct{})
-			logging.Debugf("state: event=%s → interrupting current turn (gen=%d → %d)", ev.Type, gen-1, gen)
+			slog.Debug("state: interrupting current turn", "event", ev.Type, "gen", gen, "prev_gen", gen-1)
 		} else {
-			logging.Infof("state: event=%s → listening (gen=%d)", ev.Type, gen)
+			slog.Info("state: listening", "event", ev.Type, "gen", gen)
 		}
 
 		sm.busy = true
@@ -286,23 +285,23 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	if preExistingText != "" {
 		// Wake word + command path: no recording or ASR needed.
 		userText = preExistingText
-		logging.Infof("state: user said %q (from wake word, gen=%d)", userText, gen)
+		slog.Info("state: user said", "text", userText, "gen", gen, "source", "wake_word")
 	} else {
 		// 1. Record until silence (simple energy-based VAD).
 		tRecStart = time.Now() // ⏱ recording start
 		samples := sm.recordWithVAD(cancel)
 		tRecEnd = time.Now() // ⏱ recording end
 		if canceled() {
-			logging.Debugf("state: canceled after recording (gen=%d)", gen)
+			slog.Debug("state: canceled after recording", "gen", gen)
 			return
 		}
 		if len(samples) == 0 {
-			logging.Infof("state: no speech detected (gen=%d)", gen)
+			slog.Info("state: no speech detected", "gen", gen)
 			sm.setState(ModeIdle, EmotionNeutral, "")
 			sm.emit()
 			return
 		}
-		logging.Debugf("⏱ [timing] recording: %dms (total elapsed: %dms)", tRecEnd.Sub(tRecStart).Milliseconds(), tRecEnd.Sub(t0).Milliseconds())
+		slog.Debug("⏱ [timing] recording", "ms", tRecEnd.Sub(tRecStart).Milliseconds(), "elapsed_ms", tRecEnd.Sub(t0).Milliseconds())
 
 		// 2. ASR.
 		sm.setState(ModeThinking, EmotionNeutral, "")
@@ -312,18 +311,18 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 		userText, err = sm.asrClient.Transcribe(samples, recorderSampleRate)
 		tASREnd = time.Now() // ⏱ ASR end
 		if canceled() {
-			logging.Debugf("state: canceled after ASR (gen=%d)", gen)
+			slog.Debug("state: canceled after ASR", "gen", gen)
 			return
 		}
 		if err != nil {
-			logging.Errorf("state: ASR failed: %v", err)
+			slog.Error("state: ASR failed", "error", err)
 			sm.setState(ModeIdle, EmotionNeutral, "")
 			sm.emit()
 			return
 		}
 		userText = trimSpace(userText)
 		if userText == "" {
-			logging.Infof("state: ASR returned empty text")
+			slog.Info("state: ASR returned empty text")
 			sm.setState(ModeIdle, EmotionNeutral, "")
 			sm.emit()
 			return
@@ -332,15 +331,15 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 		sm.mu.Lock()
 		sm.state.LastUserText = userText
 		sm.mu.Unlock()
-		logging.Infof("state: user said %q (gen=%d)", userText, gen)
-		logging.Debugf("⏱ [timing] ASR: %dms (total elapsed: %dms)", tASREnd.Sub(tASRStart).Milliseconds(), tASREnd.Sub(t0).Milliseconds())
+		slog.Info("state: user said", "text", userText, "gen", gen)
+		slog.Debug("⏱ [timing] ASR", "ms", tASREnd.Sub(tASRStart).Milliseconds(), "elapsed_ms", tASREnd.Sub(t0).Milliseconds())
 	}
 
 	// Re-emit so the frontend shows the recognized text during thinking.
 	sm.emit()
 
 	if canceled() {
-		logging.Debugf("state: canceled before LLM (gen=%d)", gen)
+		slog.Debug("state: canceled before LLM", "gen", gen)
 		return
 	}
 
@@ -375,7 +374,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 			}
 			result, err := sm.ttsClient.Synthesize(sentence, 1.0)
 			if err != nil {
-				logging.Errorf("state: TTS failed for sentence %q: %v", sentence, err)
+				slog.Error("state: TTS failed for sentence", "sentence", sentence, "error", err)
 				ttsErrs <- err
 				return
 			}
@@ -420,7 +419,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 		case <-cancel:
 			close(sentenceCh)
 			<-ttsDone
-			logging.Debugf("state: canceled during LLM (gen=%d)", gen)
+			slog.Debug("state: canceled during LLM", "gen", gen)
 			return
 		}
 	}
@@ -431,7 +430,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	if utf8.RuneCountInString(remaining) >= 2 {
 		sentenceCh <- remaining
 	} else {
-		logging.Debugf("state: discarding short sentence tail %q (%d runes)", remaining, utf8.RuneCountInString(remaining))
+		slog.Debug("state: discarding short sentence tail", "text", remaining, "runes", utf8.RuneCountInString(remaining))
 	}
 
 	// Close sentenceCh so the TTS goroutine finishes.
@@ -441,7 +440,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	// Check for TTS errors.
 	select {
 	case err := <-ttsErrs:
-		logging.Errorf("state: TTS failed: %v", err)
+		slog.Error("state: TTS failed", "error", err)
 		sm.setState(ModeIdle, EmotionNeutral, "")
 		sm.emit()
 		return
@@ -449,12 +448,12 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	}
 
 	if canceled() {
-		logging.Debugf("state: canceled after TTS (gen=%d)", gen)
+		slog.Debug("state: canceled after TTS", "gen", gen)
 		return
 	}
 
 	if len(allSamples) == 0 {
-		logging.Warnf("state: TTS produced no audio")
+		slog.Warn("state: TTS produced no audio")
 		sm.setState(ModeIdle, EmotionNeutral, "")
 		sm.emit()
 		return
@@ -476,19 +475,23 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	tLLMEnd := tLLMLastToken
 
 	if llmFirstTokenSet {
-		logging.Debugf("⏱ [timing] LLM: first_token=%dms, stream_done=%dms (total elapsed: %dms)",
-			tLLMFirstToken.Sub(tLLMStart).Milliseconds(),
-			tLLMEnd.Sub(tLLMStart).Milliseconds(),
-			tLLMEnd.Sub(t0).Milliseconds())
+		slog.Debug("⏱ [timing] LLM",
+			"first_token_ms", tLLMFirstToken.Sub(tLLMStart).Milliseconds(),
+			"stream_done_ms", tLLMEnd.Sub(tLLMStart).Milliseconds(),
+			"elapsed_ms", tLLMEnd.Sub(t0).Milliseconds())
 	} else {
-		logging.Debugf("⏱ [timing] LLM: stream_done=%dms (total elapsed: %dms)", tLLMEnd.Sub(tLLMStart).Milliseconds(), tLLMEnd.Sub(t0).Milliseconds())
+		slog.Debug("⏱ [timing] LLM",
+			"stream_done_ms", tLLMEnd.Sub(tLLMStart).Milliseconds(),
+			"elapsed_ms", tLLMEnd.Sub(t0).Milliseconds())
 	}
 
-	logging.Debugf("⏱ [timing] TTS: %dms (overlap with LLM, total elapsed: %dms)", tTTSEnd.Sub(tTTSStart).Milliseconds(), tTTSEnd.Sub(t0).Milliseconds())
+	slog.Debug("⏱ [timing] TTS",
+		"ms", tTTSEnd.Sub(tTTSStart).Milliseconds(),
+		"elapsed_ms", tTTSEnd.Sub(t0).Milliseconds())
 
 	// 4. Speak — drive mouth visemes on a fixed rhythm while audio plays.
 	if sm.audioPlayer == nil {
-		logging.Warnf("state: audio player is nil, skipping playback")
+		slog.Warn("state: audio player is nil, skipping playback")
 		sm.mu.Lock()
 		sm.state.IsSpeaking = false
 		sm.mu.Unlock()
@@ -506,7 +509,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	tPlayStart := time.Now() // ⏱ playback start
 	player, err := sm.audioPlayer.Play(allSamples)
 	if err != nil {
-		logging.Errorf("state: audio play error: %v", err)
+		slog.Error("state: audio play error", "error", err)
 		sm.mu.Lock()
 		sm.state.IsSpeaking = false
 		sm.mu.Unlock()
@@ -539,13 +542,13 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	if tLLMEnd.After(tTTSEnd) {
 		overlapEnd = tLLMEnd
 	}
-	logging.Debugf("⏱ [timing] playback: %dms | TOTAL pipeline: %dms (rec=%.1f%%, asr=%.1f%%, llm+tts overlap=%.1f%%, play=%.1f%%)",
-		tPlayEnd.Sub(tPlayStart).Milliseconds(),
-		tPlayEnd.Sub(t0).Milliseconds(),
-		float64(tRecEnd.Sub(tRecStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
-		float64(tASREnd.Sub(tASRStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
-		float64(overlapEnd.Sub(tLLMStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
-		float64(tPlayEnd.Sub(tPlayStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
+	slog.Debug("⏱ [timing] playback",
+		"ms", tPlayEnd.Sub(tPlayStart).Milliseconds(),
+		"total_ms", tPlayEnd.Sub(t0).Milliseconds(),
+		"rec_pct", float64(tRecEnd.Sub(tRecStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
+		"asr_pct", float64(tASREnd.Sub(tASRStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
+		"llm_tts_overlap_pct", float64(overlapEnd.Sub(tLLMStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
+		"play_pct", float64(tPlayEnd.Sub(tPlayStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
 	)
 }
 
@@ -591,14 +594,14 @@ func (sm *StateMachine) speakWithCancel(player *oto.Player, cancel <-chan struct
 	for player.IsPlaying() {
 		select {
 		case <-cancel:
-			logging.Debugf("state: playback interrupted by user")
+			slog.Debug("state: playback interrupted by user")
 			player.Pause()
 			return
 		default:
 		}
 
 		if err := player.Err(); err != nil {
-			logging.Errorf("state: audio play error: %v", err)
+			slog.Error("state: audio play error", "error", err)
 			return
 		}
 
@@ -633,7 +636,7 @@ func (sm *StateMachine) speakWithCancel(player *oto.Player, cancel <-chan struct
 func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 	chunks, err := sm.recorder.Start()
 	if err != nil {
-		logging.Errorf("state: recording failed: %v", err)
+		slog.Error("state: recording failed", "error", err)
 		return nil
 	}
 	// The recorder is persistent — Start() returns a fresh subscriber
@@ -654,7 +657,7 @@ func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 	for {
 		select {
 		case <-cancel:
-			logging.Debugf("state: recording canceled")
+			slog.Debug("state: recording canceled")
 			return all
 		case chunk, ok := <-chunks:
 			if !ok {
@@ -671,7 +674,7 @@ func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 			rms := rmsOf(chunk)
 			if rms > speechThreshold {
 				if !speaking {
-					logging.Debugf("state: speech started (rms=%.4f)", rms)
+					slog.Debug("state: speech started", "rms", rms)
 					speaking = true
 				}
 				lastSpeech = time.Now()
@@ -679,13 +682,13 @@ func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 
 			// Stop when speech started and silence persisted long enough.
 			if speaking && time.Since(lastSpeech) >= silenceDuration {
-				logging.Debugf("state: silence detected, stopping recording")
+				slog.Debug("state: silence detected, stopping recording")
 				return all
 			}
 
 			// Hard safety cap.
 			if time.Since(start) >= maxDuration {
-				logging.Debugf("state: max recording duration reached")
+				slog.Debug("state: max recording duration reached")
 				return all
 			}
 		}

@@ -3,6 +3,7 @@
 package audio
 
 import (
+	"log/slog"
 	"math"
 	"runtime"
 	"sync"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/go-ole/go-ole"
 	"github.com/moutend/go-wca/pkg/wca"
-	"github.com/liuyngchng/avatar-desktop-x64/internal/logging"
 )
 
 const (
@@ -69,7 +69,7 @@ func (r *windowsRecorder) captureLoop() {
 	// --- Initialize COM once ---
 	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err != nil {
 		if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
-			logging.Errorf("audio: CoInitializeEx: %v", err)
+			slog.Error("audio: CoInitializeEx", "error", err)
 			return
 		}
 	}
@@ -79,14 +79,14 @@ func (r *windowsRecorder) captureLoop() {
 	var mmde *wca.IMMDeviceEnumerator
 	if err := wca.CoCreateInstance(wca.CLSID_MMDeviceEnumerator, 0, wca.CLSCTX_ALL,
 		wca.IID_IMMDeviceEnumerator, &mmde); err != nil {
-		logging.Errorf("audio: CoCreateInstance(MMDeviceEnumerator): %v", err)
+		slog.Error("audio: CoCreateInstance(MMDeviceEnumerator)", "error", err)
 		return
 	}
 	defer mmde.Release()
 
 	var mmd *wca.IMMDevice
 	if err := mmde.GetDefaultAudioEndpoint(wca.ECapture, wca.EConsole, &mmd); err != nil {
-		logging.Errorf("audio: GetDefaultAudioEndpoint(capture): %v", err)
+		slog.Error("audio: GetDefaultAudioEndpoint(capture)", "error", err)
 		return
 	}
 	defer mmd.Release()
@@ -94,7 +94,7 @@ func (r *windowsRecorder) captureLoop() {
 	// --- Activate IAudioClient once ---
 	var ac *wca.IAudioClient
 	if err := mmd.Activate(wca.IID_IAudioClient, wca.CLSCTX_ALL, nil, &ac); err != nil {
-		logging.Errorf("audio: Activate(IAudioClient): %v", err)
+		slog.Error("audio: Activate(IAudioClient)", "error", err)
 		return
 	}
 	defer ac.Release()
@@ -102,12 +102,15 @@ func (r *windowsRecorder) captureLoop() {
 	// Get the device's mix format (log once).
 	var mixFormat *wca.WAVEFORMATEX
 	if err := ac.GetMixFormat(&mixFormat); err != nil {
-		logging.Errorf("audio: GetMixFormat: %v", err)
+		slog.Error("audio: GetMixFormat", "error", err)
 		return
 	}
 	defer ole.CoTaskMemFree(uintptr(unsafe.Pointer(mixFormat)))
-	logging.Infof("audio: capture device mix format: tag=%d, channels=%d, rate=%d, bits=%d",
-		mixFormat.WFormatTag, mixFormat.NChannels, mixFormat.NSamplesPerSec, mixFormat.WBitsPerSample)
+	slog.Info("audio: capture device mix format",
+		"tag", mixFormat.WFormatTag,
+		"channels", mixFormat.NChannels,
+		"rate", mixFormat.NSamplesPerSec,
+		"bits", mixFormat.WBitsPerSample)
 
 	// Request 16kHz mono PCM format.
 	requestedFormat := &wca.WAVEFORMATEX{
@@ -123,42 +126,44 @@ func (r *windowsRecorder) captureLoop() {
 	streamFlags := uint32(wca.AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM)
 	if err := ac.Initialize(wca.AUDCLNT_SHAREMODE_SHARED, streamFlags,
 		recorderBufferDuration, 0, requestedFormat, nil); err != nil {
-		logging.Warnf("audio: Initialize with AUTOCONVERTPCM failed: %v; retrying without", err)
+		slog.Warn("audio: Initialize with AUTOCONVERTPCM failed, retrying without", "error", err)
 		streamFlags = 0
 		if err := ac.Initialize(wca.AUDCLNT_SHAREMODE_SHARED, streamFlags,
 			recorderBufferDuration, 0, requestedFormat, nil); err != nil {
-			logging.Errorf("audio: Initialize: %v", err)
+			slog.Error("audio: Initialize", "error", err)
 			return
 		}
 	}
 
 	var bufferFrameSize uint32
 	if err := ac.GetBufferSize(&bufferFrameSize); err != nil {
-		logging.Errorf("audio: GetBufferSize: %v", err)
+		slog.Error("audio: GetBufferSize", "error", err)
 		return
 	}
 
 	var acc *wca.IAudioCaptureClient
 	if err := ac.GetService(wca.IID_IAudioCaptureClient, &acc); err != nil {
-		logging.Errorf("audio: GetService(IAudioCaptureClient): %v", err)
+		slog.Error("audio: GetService(IAudioCaptureClient)", "error", err)
 		return
 	}
 	defer acc.Release()
 
 	if err := ac.Start(); err != nil {
-		logging.Errorf("audio: Start: %v", err)
+		slog.Error("audio: Start", "error", err)
 		return
 	}
 	defer ac.Stop()
 
-	logging.Infof("audio: WASAPI recording started (persistent), native=%d Hz, requested=%d Hz, buffer=%d frames",
-		mixFormat.NSamplesPerSec, recorderSampleRate, bufferFrameSize)
+	slog.Info("audio: WASAPI recording started (persistent)",
+		"native_hz", mixFormat.NSamplesPerSec,
+		"requested_hz", recorderSampleRate,
+		"buffer_frames", bufferFrameSize)
 
 	// --- Capture loop: runs until Stop() is called ---
 	for {
 		select {
 		case <-r.stopCh:
-			logging.Infof("audio: recording stopped (shutdown)")
+			slog.Info("audio: recording stopped (shutdown)")
 			return
 		default:
 		}
@@ -168,7 +173,7 @@ func (r *windowsRecorder) captureLoop() {
 		for {
 			var packetSize uint32
 			if err := acc.GetNextPacketSize(&packetSize); err != nil {
-				logging.Errorf("audio: GetNextPacketSize: %v", err)
+				slog.Error("audio: GetNextPacketSize", "error", err)
 				return
 			}
 			if packetSize == 0 {
@@ -179,7 +184,7 @@ func (r *windowsRecorder) captureLoop() {
 			var framesToRead uint32
 			var flags uint32
 			if err := acc.GetBuffer(&data, &framesToRead, &flags, nil, nil); err != nil {
-				logging.Errorf("audio: GetBuffer: %v", err)
+				slog.Error("audio: GetBuffer", "error", err)
 				return
 			}
 

@@ -4,11 +4,11 @@ package audio
 import (
 	"bytes"
 	"encoding/binary"
+	"log/slog"
 	"math"
 	"time"
 
 	"github.com/ebitengine/oto/v3"
-	"github.com/liuyngchng/avatar-desktop-x64/internal/logging"
 )
 
 // Player plays PCM float32 audio through the default audio device.
@@ -29,14 +29,14 @@ func NewPlayer(sampleRate int) (*Player, error) {
 	if err != nil {
 		return nil, err
 	}
-	logging.Infof("audio: player created, sample_rate=%d", sampleRate)
+	slog.Info("audio: player created", "sample_rate", sampleRate)
 	return &Player{ctx: ctx, ready: ready}, nil
 }
 
 // WaitReady blocks until the audio context is ready.
 func (p *Player) WaitReady() {
 	<-p.ready
-	logging.Debugf("audio: player ready")
+	slog.Debug("audio: player ready")
 }
 
 // float32ToBytes converts normalized float32 samples in [-1, 1] to

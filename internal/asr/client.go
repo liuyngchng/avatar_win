@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -28,7 +29,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/liuyngchng/avatar-desktop-x64/internal/logging"
 )
 
 // Client is a WebSocket client for the DashScope realtime ASR API.
@@ -157,7 +157,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 		},
 	}
 	if err := c.conn.WriteJSON(runTask); err != nil {
-		logging.Warnf("asr: write run-task failed, reconnecting: %v", err)
+		slog.Warn("asr: write run-task failed, reconnecting", "error", err)
 		c.closeLocked()
 		if err2 := c.ensureConnectedLocked(); err2 != nil {
 			c.mu.Unlock()
@@ -168,7 +168,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 			return "", fmt.Errorf("asr: send run-task: %w", err)
 		}
 	}
-	logging.Debugf("asr: sent run-task (task=%s, model=%s)", taskID, c.model)
+	slog.Debug("asr: sent run-task", "task", taskID, "model", c.model)
 
 	// Snapshot the connection and release the lock before blocking on reads.
 	conn := c.conn
@@ -202,7 +202,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 
 			var event map[string]interface{}
 			if err := json.Unmarshal(msg, &event); err != nil {
-				logging.Errorf("asr: parse event: %v", err)
+				slog.Error("asr: parse event", "error", err)
 				continue
 			}
 
@@ -211,13 +211,13 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 
 			switch eventName {
 			case "task-started":
-				logging.Debugf("asr: task-started")
+				slog.Debug("asr: task-started")
 				taskStarted = true
 				if !audioSent {
 					audioSent = true
 					go func() {
 						if err := c.sendAudio(conn, samples, sampleRate); err != nil {
-							logging.Errorf("asr: send audio: %v", err)
+							slog.Error("asr: send audio", "error", err)
 						}
 						// Send finish-task.
 						finishTask := map[string]interface{}{
@@ -231,9 +231,9 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 							},
 						}
 						if err := conn.WriteJSON(finishTask); err != nil {
-							logging.Errorf("asr: send finish-task: %v", err)
+							slog.Error("asr: send finish-task", "error", err)
 						}
-						logging.Debugf("asr: sent finish-task")
+						slog.Debug("asr: sent finish-task")
 					}()
 				}
 
@@ -251,7 +251,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 				}
 
 			case "task-finished":
-				logging.Debugf("asr: task-finished")
+				slog.Debug("asr: task-finished")
 				return
 
 			case "task-failed":
@@ -260,7 +260,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 				return
 
 			default:
-				logging.Warnf("asr: unknown event: %s", eventName)
+				slog.Warn("asr: unknown event", "event", eventName)
 			}
 		}
 	}()
@@ -282,8 +282,8 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 		return "", fmt.Errorf("asr: task never started")
 	}
 
-	logging.Infof("asr: final text: %q", finalText)
-	logging.Debugf("⏱ [timing] ASR: total=%dms (no handshake, send_audio + recv_results)", time.Since(t0).Milliseconds())
+	slog.Info("asr: final text", "text", finalText)
+	slog.Debug("⏱ [timing] ASR: total", "ms", time.Since(t0).Milliseconds())
 	return finalText, nil
 }
 
@@ -306,7 +306,7 @@ func (c *Client) ensureConnectedLocked() error {
 		return fmt.Errorf("asr: websocket dial: %w", err)
 	}
 	c.conn = conn
-	logging.Debugf("⏱ [timing] ASR: ws_connect=%dms", time.Since(t0).Milliseconds())
+	slog.Debug("⏱ [timing] ASR: ws_connect", "ms", time.Since(t0).Milliseconds())
 	return nil
 }
 
@@ -337,7 +337,7 @@ func (c *Client) sendAudio(conn *websocket.Conn, samples []float32, sampleRate i
 		// input and uses finish-task to delimit the end of the audio.
 	}
 
-	logging.Debugf("asr: sent %d bytes of PCM audio in %d-byte chunks (fast-forward)", len(pcm), chunkSize)
+	slog.Debug("asr: sent PCM audio", "bytes", len(pcm), "chunk_size", chunkSize)
 	return nil
 }
 

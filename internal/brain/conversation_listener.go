@@ -1,9 +1,8 @@
 package brain
 
 import (
+	"log/slog"
 	"time"
-
-	"github.com/liuyngchng/avatar-desktop-x64/internal/logging"
 )
 
 // conversationListener runs while the avatar is in the multi-turn
@@ -79,14 +78,14 @@ func (l *conversationListener) stop() {
 //   - l.done        → the listener was cancelled (e.g. user tapped).
 func (l *conversationListener) run() {
 	idle := l.sm.conversationIdle
-	logging.Infof("conversation: opened multi-turn window (idle=%dms)", idle.Milliseconds())
+	slog.Info("conversation: opened multi-turn window", "idle_ms", idle.Milliseconds())
 
 	idleTimer := time.NewTimer(idle)
 	defer idleTimer.Stop()
 
 	chunks, err := l.sm.recorder.Start()
 	if err != nil {
-		logging.Errorf("conversation: recorder start failed: %v", err)
+		slog.Error("conversation: recorder start failed", "error", err)
 		l.cleanup()
 		return
 	}
@@ -104,11 +103,11 @@ func (l *conversationListener) run() {
 	for {
 		select {
 		case <-l.done:
-			logging.Debugf("conversation: cancelled")
+			slog.Debug("conversation: cancelled")
 			return
 
 		case <-idleTimer.C:
-			logging.Infof("conversation: idle window expired, closing")
+			slog.Info("conversation: idle window expired, closing")
 			l.endConversation()
 			return
 
@@ -123,11 +122,11 @@ func (l *conversationListener) run() {
 				if !speaking {
 					speaking = true
 					speechStart = time.Now()
-					logging.Debugf("conversation: speech started (rms=%.4f)", rms)
+					slog.Debug("conversation: speech started", "rms", rms)
 					continue
 				}
 				if time.Since(speechStart) >= speechMinDuration {
-					logging.Infof("conversation: speech stable, starting new turn")
+					slog.Info("conversation: speech stable, starting new turn")
 					l.triggerNewTurn()
 					return
 				}
@@ -154,7 +153,7 @@ func (l *conversationListener) triggerNewTurn() {
 	select {
 	case l.sm.events <- Event{Type: "speech_detected"}:
 	default:
-		logging.Warnf("conversation: events channel full, dropping speech_detected")
+		slog.Warn("conversation: events channel full, dropping speech_detected")
 	}
 }
 
