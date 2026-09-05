@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -33,6 +35,33 @@ type humanHandler struct {
 // defaultHandler holds the handler installed by Init, so SetLevel/GetLevel
 // can adjust the global verbosity after startup (e.g. once cfg.yml is read).
 var defaultHandler *humanHandler
+
+// moduleRoot is the absolute path of the module root (go.mod directory).
+// It is stripped from source file paths so the log shows package-relative paths
+// like "i/b/statemachine:247" instead of absolute paths.
+var moduleRoot string
+
+func init() {
+	moduleRoot = findModuleRoot()
+}
+
+// findModuleRoot walks up from the current directory until it finds go.mod.
+func findModuleRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
 
 // Init creates a humanHandler writing to w, filtering at or above minLevel,
 // sets it as slog's default logger, and returns the handler so the caller can
@@ -190,9 +219,16 @@ func isLoggingPackage(file string) bool {
 }
 
 // appendFileLine appends "<dir-initials>/<basename>:<line> " to buf.
-// Each directory component becomes its first letter, e.g.
-// "internal/brain/statemachine.go" → "i/b/statemachine:247".
+// The module root is stripped first so the path is relative to the project:
+// "/home/rd/workspace/avatar_win/internal/brain/statemachine.go" → "i/b/statemachine:247".
 func appendFileLine(buf []byte, file string, line int) []byte {
+	// Strip the module root prefix so we get a package-relative path.
+	if moduleRoot != "" {
+		prefix := moduleRoot + "/"
+		if strings.HasPrefix(file, prefix) {
+			file = file[len(prefix):]
+		}
+	}
 	start := 0
 	for i := 0; i < len(file); i++ {
 		if file[i] == '/' {
