@@ -369,8 +369,15 @@ try {
     # garble passes through -tags and -ldflags to go build.
     $env:GOTOOLCHAIN = "local"
     $env:GOGARBLE = "github.com/liuyngchng/avatar-desktop-x64"
-    & go run mvdan.cc/garble@v0.14.2 -literals build $GO_TAGS "-ldflags=$GO_LDFLAGS" -o $exePath .
-    if ($LASTEXITCODE -ne 0) { throw "go build failed" }
+
+    # Use Start-Process -NoNewWindow instead of & to prevent go from
+    # spawning a cascade of console windows (go run → garble → go build →
+    # compile, link, asm, etc.) on every build.
+    $garbleArgs = @("run", "mvdan.cc/garble@v0.14.2", "-literals", "build")
+    if ($GO_TAGS) { $garbleArgs += $GO_TAGS }
+    $garbleArgs += "-ldflags=$GO_LDFLAGS", "-o", $exePath, "."
+    $p = Start-Process -FilePath "go" -ArgumentList $garbleArgs -NoNewWindow -Wait -PassThru
+    if ($p.ExitCode -ne 0) { throw "go build failed" }
 } finally {
     Remove-Item Env:\GOTOOLCHAIN -ErrorAction SilentlyContinue
     Remove-Item Env:\GOGARBLE -ErrorAction SilentlyContinue

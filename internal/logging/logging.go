@@ -42,7 +42,9 @@ var defaultHandler *humanHandler
 var moduleRoot string
 
 func init() {
-	moduleRoot = findModuleRoot()
+	// Normalize to forward slashes to match runtime.CallersFrames output,
+	// which always uses "/" regardless of the OS.
+	moduleRoot = filepath.ToSlash(findModuleRoot())
 }
 
 // findModuleRoot walks up from the current directory until it finds go.mod.
