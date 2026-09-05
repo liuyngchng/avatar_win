@@ -74,12 +74,12 @@ func (d *wakeWordDetector) stop() {
 }
 
 func (d *wakeWordDetector) run() {
-	slog.Info("wakeword: listening", "wake_word", d.wakeWord)
+	slog.Info("wakeword_run_wakeword:_listening", "wake_word", d.wakeWord)
 
 	for {
 		select {
 		case <-d.done:
-			slog.Info("wakeword: stopped")
+			slog.Info("wakeword_run_wakeword:_stopped")
 			return
 		default:
 		}
@@ -93,7 +93,7 @@ func (d *wakeWordDetector) run() {
 		// Run ASR on the captured audio to check for the wake word.
 		text, err := d.sm.asrClient.Transcribe(samples, recorderSampleRate)
 		if err != nil {
-			slog.Error("wakeword: ASR failed", "error", err)
+			slog.Error("wakeword_run_wakeword:_ASR_failed", "error", err)
 			continue
 		}
 		text = strings.TrimSpace(text)
@@ -101,11 +101,11 @@ func (d *wakeWordDetector) run() {
 			continue
 		}
 
-		slog.Debug("wakeword: heard", "text", text)
+		slog.Debug("wakeword_run_wakeword:_heard", "text", text)
 
 		// Check if the text contains the wake word.
 		if containsWakeWord(text, d.wakeWord) {
-			slog.Info("wakeword: WAKE WORD DETECTED", "text", text)
+			slog.Info("wakeword_run_wakeword:_WAKE_WORD_DETECTED", "text", text)
 
 			remainder := extractAfterWakeWord(text, d.wakeWord)
 
@@ -123,7 +123,7 @@ func (d *wakeWordDetector) run() {
 			select {
 			case d.sm.events <- ev:
 			default:
-				slog.Warn("wakeword: event channel full, dropping wake_detected")
+				slog.Warn("wakeword_run_wakeword:_event_channel_full,_dropping_wake_detected")
 			}
 			return
 		}
@@ -135,7 +135,7 @@ func (d *wakeWordDetector) run() {
 func (d *wakeWordDetector) listenForSpeech() []float32 {
 	chunks, err := d.sm.recorder.Start()
 	if err != nil {
-		slog.Error("wakeword: recorder start failed", "error", err)
+		slog.Error("wakeword_listenForSpeech_wakeword:_recorder_start_failed", "error", err)
 		return nil
 	}
 
@@ -167,19 +167,19 @@ func (d *wakeWordDetector) listenForSpeech() []float32 {
 			rms := rmsOf(chunk)
 			if rms > speechThreshold {
 				if !speaking {
-					slog.Debug("wakeword: speech detected", "rms", rms)
+					slog.Debug("wakeword_listenForSpeech_wakeword:_speech_detected", "rms", rms)
 					speaking = true
 				}
 				lastSpeech = time.Now()
 			}
 
 			if speaking && time.Since(lastSpeech) >= silenceDuration {
-				slog.Debug("wakeword: silence detected", "samples", len(all), "seconds", float64(len(all))/recorderSampleRate)
+				slog.Debug("wakeword_listenForSpeech_wakeword:_silence_detected", "samples", len(all), "seconds", float64(len(all))/recorderSampleRate)
 				return all
 			}
 
 			if time.Since(start) >= maxDuration {
-				slog.Debug("wakeword: max duration reached", "seconds", maxDuration.Seconds())
+				slog.Debug("wakeword_listenForSpeech_wakeword:_max_duration_reached", "seconds", maxDuration.Seconds())
 				return all
 			}
 		}

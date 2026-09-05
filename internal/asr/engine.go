@@ -76,7 +76,7 @@ func NewOfflineEngine(modelDir string) (Transcriber, error) {
 		return nil, fmt.Errorf("asr: failed to create recognizer (check model paths)")
 	}
 
-	slog.Info("asr: offline engine created", "num_threads", numThreads)
+	slog.Info("engine_NewOfflineEngine_asr:_offline_engine_created", "num_threads", numThreads)
 
 	return &Engine{
 		recognizer: recognizer,
@@ -108,7 +108,7 @@ func (e *Engine) Transcribe(samples []float32, sampleRate int) (string, error) {
 		return "", fmt.Errorf("asr: no result")
 	}
 
-	slog.Debug("asr: offline decoded", "samples", len(samples), "text", r.Text, "lang", r.Lang, "emotion", r.Emotion)
+	slog.Debug("engine_Transcribe_asr:_offline_decoded", "samples", len(samples), "text", r.Text, "lang", r.Lang, "emotion", r.Emotion)
 
 	return r.Text, nil
 }

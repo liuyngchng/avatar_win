@@ -81,7 +81,7 @@ func NewOfflineEngine(modelDir string) (Synthesizer, error) {
 	}
 
 	sr := tts.SampleRate()
-	slog.Info("tts: offline engine created", "sample_rate", sr, "num_threads", numThreads)
+	slog.Info("engine_NewOfflineEngine_tts:_offline_engine_created", "sample_rate", sr, "num_threads", numThreads)
 
 	return &Engine{
 		tts:        tts,
@@ -105,7 +105,7 @@ func (e *Engine) Synthesize(text string, speed float32) (*SynthesizeResult, erro
 	}
 
 	dur := float64(len(audio.Samples)) / float64(audio.SampleRate)
-	slog.Debug("tts: offline synthesized", "samples", len(audio.Samples), "duration_s", dur, "chars", len([]rune(text)))
+	slog.Debug("engine_Synthesize_tts:_offline_synthesized", "samples", len(audio.Samples), "duration_s", dur, "chars", len([]rune(text)))
 
 	return &SynthesizeResult{
 		Samples:    audio.Samples,

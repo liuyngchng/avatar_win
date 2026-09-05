@@ -157,7 +157,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 		},
 	}
 	if err := c.conn.WriteJSON(runTask); err != nil {
-		slog.Warn("asr: write run-task failed, reconnecting", "error", err)
+		slog.Warn("client_Transcribe_asr:_write_run-task_failed,_reconnecting", "error", err)
 		c.closeLocked()
 		if err2 := c.ensureConnectedLocked(); err2 != nil {
 			c.mu.Unlock()
@@ -168,7 +168,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 			return "", fmt.Errorf("asr: send run-task: %w", err)
 		}
 	}
-	slog.Debug("asr: sent run-task", "task", taskID, "model", c.model)
+	slog.Debug("client_Transcribe_asr:_sent_run-task", "task", taskID, "model", c.model)
 
 	// Snapshot the connection and release the lock before blocking on reads.
 	conn := c.conn
@@ -202,7 +202,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 
 			var event map[string]interface{}
 			if err := json.Unmarshal(msg, &event); err != nil {
-				slog.Error("asr: parse event", "error", err)
+				slog.Error("client_Transcribe_asr:_parse_event", "error", err)
 				continue
 			}
 
@@ -211,13 +211,13 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 
 			switch eventName {
 			case "task-started":
-				slog.Debug("asr: task-started")
+				slog.Debug("client_Transcribe_asr:_task-started")
 				taskStarted = true
 				if !audioSent {
 					audioSent = true
 					go func() {
 						if err := c.sendAudio(conn, samples, sampleRate); err != nil {
-							slog.Error("asr: send audio", "error", err)
+							slog.Error("client_Transcribe_asr:_send_audio", "error", err)
 						}
 						// Send finish-task.
 						finishTask := map[string]interface{}{
@@ -231,9 +231,9 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 							},
 						}
 						if err := conn.WriteJSON(finishTask); err != nil {
-							slog.Error("asr: send finish-task", "error", err)
+							slog.Error("client_Transcribe_asr:_send_finish-task", "error", err)
 						}
-						slog.Debug("asr: sent finish-task")
+						slog.Debug("client_Transcribe_asr:_sent_finish-task")
 					}()
 				}
 
@@ -251,7 +251,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 				}
 
 			case "task-finished":
-				slog.Debug("asr: task-finished")
+				slog.Debug("client_Transcribe_asr:_task-finished")
 				return
 
 			case "task-failed":
@@ -260,7 +260,7 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 				return
 
 			default:
-				slog.Warn("asr: unknown event", "event", eventName)
+				slog.Warn("client_Transcribe_asr:_unknown_event", "event", eventName)
 			}
 		}
 	}()
@@ -282,8 +282,8 @@ func (c *Client) Transcribe(samples []float32, sampleRate int) (string, error) {
 		return "", fmt.Errorf("asr: task never started")
 	}
 
-	slog.Info("asr: final text", "text", finalText)
-	slog.Debug("⏱ [timing] ASR: total", "ms", time.Since(t0).Milliseconds())
+	slog.Info("client_Transcribe_asr:_final_text", "text", finalText)
+	slog.Debug("client_Transcribe_⏱_[timing]_ASR:_total", "ms", time.Since(t0).Milliseconds())
 	return finalText, nil
 }
 
@@ -306,7 +306,7 @@ func (c *Client) ensureConnectedLocked() error {
 		return fmt.Errorf("asr: websocket dial: %w", err)
 	}
 	c.conn = conn
-	slog.Debug("⏱ [timing] ASR: ws_connect", "ms", time.Since(t0).Milliseconds())
+	slog.Debug("client_ensureConnectedLocked_⏱_[timing]_ASR:_ws_connect", "ms", time.Since(t0).Milliseconds())
 	return nil
 }
 
@@ -337,7 +337,7 @@ func (c *Client) sendAudio(conn *websocket.Conn, samples []float32, sampleRate i
 		// input and uses finish-task to delimit the end of the audio.
 	}
 
-	slog.Debug("asr: sent PCM audio", "bytes", len(pcm), "chunk_size", chunkSize)
+	slog.Debug("client_sendAudio_asr:_sent_PCM_audio", "bytes", len(pcm), "chunk_size", chunkSize)
 	return nil
 }
 

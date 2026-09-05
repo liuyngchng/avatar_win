@@ -45,7 +45,7 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 	go srv.Serve(listener)
 
 	url := "http://127.0.0.1:" + strconv.Itoa(port) + "/index.html"
-	slog.Info("renderer: serving", "url", url)
+	slog.Info("renderer_windows_newPlatformRenderer_renderer:_serving", "url", url)
 
 	r := &webviewRenderer{
 		events: make(chan brain.Event, 16),
@@ -87,7 +87,7 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 		// Make the WebView2 control background transparent so the
 		// Windows desktop shows through behind the VRM avatar.
 		if err := w.SetDefaultBackgroundColor(0, 0, 0, 0); err != nil {
-			slog.Warn("renderer: transparent bg warning", "error", err)
+			slog.Warn("renderer_windows_newPlatformRenderer_renderer:_transparent_bg_warning", "error", err)
 		}
 
 		r.webview = w
@@ -96,23 +96,23 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 		if err := w.Bind("goBridge_sendEvent", func(jsonStr string) {
 			var ev brain.Event
 			if err := json.Unmarshal([]byte(jsonStr), &ev); err != nil {
-				slog.Error("renderer: bad event from JS", "error", err)
+				slog.Error("renderer_windows_newPlatformRenderer_renderer:_bad_event_from_JS", "error", err)
 				return
 			}
 			select {
 			case r.events <- ev:
 			default:
-				slog.Warn("renderer: dropping event (channel full)", "type", ev.Type)
+				slog.Warn("renderer_windows_newPlatformRenderer_renderer:_dropping_event_(channel_full)", "type", ev.Type)
 			}
 		}); err != nil {
-			slog.Warn("renderer: bind warning", "error", err)
+			slog.Warn("renderer_windows_newPlatformRenderer_renderer:_bind_warning", "error", err)
 		}
 
 		// Bind goBridge_moveWindow so JS can drag the borderless window.
 		if err := w.Bind("goBridge_moveWindow", func(dx, dy int) {
 			w.MoveBy(dx, dy)
 		}); err != nil {
-			slog.Warn("renderer: bind moveWindow warning", "error", err)
+			slog.Warn("renderer_windows_newPlatformRenderer_renderer:_bind_moveWindow_warning", "error", err)
 		}
 
 		// Bind goBridge_setWindowSize so JS can resize + bottom-right the window.
@@ -123,7 +123,7 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 			w.SetSize(width, height, webview2.HintNone)
 			w.BottomRight()
 		}); err != nil {
-			slog.Warn("renderer: bind setWindowSize warning", "error", err)
+			slog.Warn("renderer_windows_newPlatformRenderer_renderer:_bind_setWindowSize_warning", "error", err)
 		}
 
 		w.Navigate(url)
@@ -131,9 +131,9 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 
 		// Run the Windows message pump. This blocks until Destroy() is
 		// called (which posts WM_QUIT).
-		slog.Info("renderer: entering message loop")
+		slog.Info("renderer_windows_newPlatformRenderer_renderer:_entering_message_loop")
 		w.Run()
-		slog.Info("renderer: message loop exited")
+		slog.Info("renderer_windows_newPlatformRenderer_renderer:_message_loop_exited")
 
 		// The window was destroyed (user clicked X, or programmatic
 		// Destroy()).  Signal that the renderer is done so the main
@@ -152,7 +152,7 @@ func newPlatformRenderer(webFS fs.FS) (Renderer, error) {
 func (r *webviewRenderer) SendMessage(msg any) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		slog.Error("renderer: marshal error", "error", err)
+		slog.Error("renderer_windows_SendMessage_renderer:_marshal_error", "error", err)
 		return
 	}
 	js := "if(window.handleMessage)handleMessage(" + strconv.Quote(string(data)) + ")"

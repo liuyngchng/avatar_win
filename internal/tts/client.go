@@ -111,7 +111,7 @@ func (c *Client) closeGracefulLocked() {
 	}
 	c.conn.SetWriteDeadline(time.Now().Add(closeGracePeriod))
 	if err := c.conn.WriteJSON(finishEvent); err != nil {
-		slog.Warn("tts: session.finish write failed (will close)", "error", err)
+		slog.Warn("client_closeGracefulLocked_tts:_session.finish_write_failed_(will_close)", "error", err)
 	}
 
 	// Read until session.finished or the grace period expires.
@@ -124,7 +124,7 @@ func (c *Client) closeGracefulLocked() {
 		var event map[string]interface{}
 		if json.Unmarshal(msg, &event) == nil {
 			if t, _ := event["type"].(string); t == "session.finished" {
-				slog.Debug("tts: session.finished (clean close)")
+				slog.Debug("client_closeGracefulLocked_tts:_session.finished_(clean_close)")
 				break
 			}
 		}
@@ -176,7 +176,7 @@ func (c *Client) Synthesize(text string, speed float32) (*SynthesizeResult, erro
 		"text":     text,
 	}
 	if err := c.conn.WriteJSON(appendEvent); err != nil {
-		slog.Warn("tts: write append failed, reconnecting", "error", err)
+		slog.Warn("client_Synthesize_tts:_write_append_failed,_reconnecting", "error", err)
 		c.closeLocked()
 		if err2 := c.ensureConnectedLocked(); err2 != nil {
 			c.mu.Unlock()
@@ -187,7 +187,7 @@ func (c *Client) Synthesize(text string, speed float32) (*SynthesizeResult, erro
 			return nil, fmt.Errorf("tts: send input_text_buffer.append: %w", err)
 		}
 	}
-	slog.Debug("tts: sent input_text_buffer.append", "chars", len([]rune(text)))
+	slog.Debug("client_Synthesize_tts:_sent_input_text_buffer.append", "chars", len([]rune(text)))
 
 	// Commit to trigger synthesis.
 	commitEvent := map[string]interface{}{
@@ -198,7 +198,7 @@ func (c *Client) Synthesize(text string, speed float32) (*SynthesizeResult, erro
 		c.mu.Unlock()
 		return nil, fmt.Errorf("tts: send input_text_buffer.commit: %w", err)
 	}
-	slog.Debug("tts: sent input_text_buffer.commit")
+	slog.Debug("client_Synthesize_tts:_sent_input_text_buffer.commit")
 
 	// Snapshot the connection and release the lock before blocking on reads.
 	// This prevents one hung synthesis from deadlocking the entire client.
@@ -219,8 +219,8 @@ func (c *Client) Synthesize(text string, speed float32) (*SynthesizeResult, erro
 	}
 
 	dur := float64(len(allSamples)) / float64(c.sampleRate)
-	slog.Debug("tts: synthesized", "samples", len(allSamples), "duration_s", dur, "chars", len([]rune(text)))
-	slog.Debug("⏱ [timing] TTS: total", "ms", time.Since(t0).Milliseconds())
+	slog.Debug("client_Synthesize_tts:_synthesized", "samples", len(allSamples), "duration_s", dur, "chars", len([]rune(text)))
+	slog.Debug("client_Synthesize_⏱_[timing]_TTS:_total", "ms", time.Since(t0).Milliseconds())
 
 	return &SynthesizeResult{
 		Samples:    allSamples,
@@ -248,7 +248,7 @@ func (c *Client) ensureConnectedLocked() error {
 		}
 		return fmt.Errorf("tts: websocket dial: %w", err)
 	}
-	slog.Debug("tts: connected", "url", url, "ms", time.Since(t0).Milliseconds())
+	slog.Debug("client_ensureConnectedLocked_tts:_connected", "url", url, "ms", time.Since(t0).Milliseconds())
 
 	// Wait for session.created.
 	_, msg, err := conn.ReadMessage()
@@ -268,7 +268,7 @@ func (c *Client) ensureConnectedLocked() error {
 	}
 	sess, _ := event["session"].(map[string]interface{})
 	sid, _ := sess["id"].(string)
-	slog.Debug("tts: session.created", "id", sid)
+	slog.Debug("client_ensureConnectedLocked_tts:_session.created", "id", sid)
 
 	// Send session.update (commit mode).
 	updateEvent := map[string]interface{}{
@@ -286,7 +286,7 @@ func (c *Client) ensureConnectedLocked() error {
 		conn.Close()
 		return fmt.Errorf("tts: send session.update: %w", err)
 	}
-	slog.Debug("tts: sent session.update", "voice", c.voice, "format", c.format, "rate", c.sampleRate)
+	slog.Debug("client_ensureConnectedLocked_tts:_sent_session.update", "voice", c.voice, "format", c.format, "rate", c.sampleRate)
 
 	// Wait for session.updated.
 	_, msg, err = conn.ReadMessage()
@@ -310,10 +310,10 @@ func (c *Client) ensureConnectedLocked() error {
 		conn.Close()
 		return fmt.Errorf("tts: expected session.updated, got %q", et)
 	}
-	slog.Debug("tts: session.updated")
+	slog.Debug("client_ensureConnectedLocked_tts:_session.updated")
 
 	c.conn = conn
-	slog.Debug("⏱ [timing] TTS: ws_connect+handshake", "ms", time.Since(t0).Milliseconds())
+	slog.Debug("client_ensureConnectedLocked_⏱_[timing]_TTS:_ws_connect+handshake", "ms", time.Since(t0).Milliseconds())
 	return nil
 }
 
@@ -330,7 +330,7 @@ func (c *Client) readAudioLoopConn(conn *websocket.Conn, allSamples *[]float32) 
 
 		var event map[string]interface{}
 		if err := json.Unmarshal(msg, &event); err != nil {
-			slog.Error("tts: parse event", "error", err)
+			slog.Error("client_readAudioLoopConn_tts:_parse_event", "error", err)
 			continue
 		}
 
@@ -344,17 +344,17 @@ func (c *Client) readAudioLoopConn(conn *websocket.Conn, allSamples *[]float32) 
 			}
 			raw, err := base64.StdEncoding.DecodeString(deltaB64)
 			if err != nil {
-				slog.Warn("tts: decode base64 audio", "error", err)
+				slog.Warn("client_readAudioLoopConn_tts:_decode_base64_audio", "error", err)
 				continue
 			}
 			samples := pcmToFloat32(raw)
 			*allSamples = append(*allSamples, samples...)
 
 		case "response.audio.done":
-			slog.Debug("tts: response.audio.done")
+			slog.Debug("client_readAudioLoopConn_tts:_response.audio.done")
 
 		case "response.done":
-			slog.Debug("tts: response.done")
+			slog.Debug("client_readAudioLoopConn_tts:_response.done")
 			return nil
 
 		case "error":

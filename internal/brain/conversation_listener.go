@@ -73,19 +73,19 @@ func (l *conversationListener) stop() {
 //
 //   - timer.C       → idle window expired: end the conversation.
 //   - speech stable → clear the listener slot under sm.mu, then enqueue
-//                     a speech_detected event so handleEvent runs the
-//                     normal pipeline-start path.
+//     a speech_detected event so handleEvent runs the
+//     normal pipeline-start path.
 //   - l.done        → the listener was cancelled (e.g. user tapped).
 func (l *conversationListener) run() {
 	idle := l.sm.conversationIdle
-	slog.Info("conversation: opened multi-turn window", "idle_ms", idle.Milliseconds())
+	slog.Info("conversation_listener_run_conversation:_opened_multi-turn_window", "idle_ms", idle.Milliseconds())
 
 	idleTimer := time.NewTimer(idle)
 	defer idleTimer.Stop()
 
 	chunks, err := l.sm.recorder.Start()
 	if err != nil {
-		slog.Error("conversation: recorder start failed", "error", err)
+		slog.Error("conversation_listener_run_conversation:_recorder_start_failed", "error", err)
 		l.cleanup()
 		return
 	}
@@ -103,11 +103,11 @@ func (l *conversationListener) run() {
 	for {
 		select {
 		case <-l.done:
-			slog.Debug("conversation: cancelled")
+			slog.Debug("conversation_listener_run_conversation:_cancelled")
 			return
 
 		case <-idleTimer.C:
-			slog.Info("conversation: idle window expired, closing")
+			slog.Info("conversation_listener_run_conversation:_idle_window_expired,_closing")
 			l.endConversation()
 			return
 
@@ -122,11 +122,11 @@ func (l *conversationListener) run() {
 				if !speaking {
 					speaking = true
 					speechStart = time.Now()
-					slog.Debug("conversation: speech started", "rms", rms)
+					slog.Debug("conversation_listener_run_conversation:_speech_started", "rms", rms)
 					continue
 				}
 				if time.Since(speechStart) >= speechMinDuration {
-					slog.Info("conversation: speech stable, starting new turn")
+					slog.Info("conversation_listener_run_conversation:_speech_stable,_starting_new_turn")
 					l.triggerNewTurn()
 					return
 				}
@@ -153,7 +153,7 @@ func (l *conversationListener) triggerNewTurn() {
 	select {
 	case l.sm.events <- Event{Type: "speech_detected"}:
 	default:
-		slog.Warn("conversation: events channel full, dropping speech_detected")
+		slog.Warn("conversation_listener_triggerNewTurn_conversation:_events_channel_full,_dropping_speech_detected")
 	}
 }
 

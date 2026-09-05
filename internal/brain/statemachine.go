@@ -49,7 +49,7 @@ type StateMachine struct {
 
 	mu         sync.Mutex
 	busy       bool
-	generation int64        // incremented on each tap; used to detect stale pipelines
+	generation int64         // incremented on each tap; used to detect stale pipelines
 	cancel     chan struct{} // closed when the current pipeline should abort
 
 	// inConversation is true while the FSM is in the multi-turn window
@@ -93,16 +93,16 @@ func NewStateMachine(
 			Emotion:               EmotionNeutral,
 			IdleAnimationsEnabled: idleAnimationsEnabled,
 		},
-		stateChanges:    make(chan State, 16),
-		events:          make(chan Event, 16),
-		visemes:         make(chan VisemeEvent, 64),
-		ttsClient:       ttsClient,
-		asrClient:       asrClient,
-		llmClient:       llmClient,
-		audioPlayer:     audioPlayer,
-		recorder:        recorder,
-		cancel:          make(chan struct{}),
-		wakeWordConfig:  wakeWord,
+		stateChanges:     make(chan State, 16),
+		events:           make(chan Event, 16),
+		visemes:          make(chan VisemeEvent, 64),
+		ttsClient:        ttsClient,
+		asrClient:        asrClient,
+		llmClient:        llmClient,
+		audioPlayer:      audioPlayer,
+		recorder:         recorder,
+		cancel:           make(chan struct{}),
+		wakeWordConfig:   wakeWord,
 		conversationIdle: conversationIdle,
 	}
 	// Start the wake word detector in the background. It will only activate
@@ -161,7 +161,7 @@ func (sm *StateMachine) handleEvent(ev Event) {
 		// Log a clear error and return to idle instead of crashing on a
 		// nil-pointer dereference deep in the pipeline.
 		if sm.asrClient == nil || sm.llmClient == nil || sm.ttsClient == nil {
-			slog.Error("state: event="+ev.Type+" → CANNOT TALK: no cfg.yml / API clients not initialized",
+			slog.Error("statemachine_handleEvent_state:_event="+ev.Type+" → CANNOT TALK: no cfg.yml / API clients not initialized",
 				"asr", sm.asrClient != nil, "llm", sm.llmClient != nil, "tts", sm.ttsClient != nil)
 			sm.setState(ModeIdle, EmotionNeutral, "")
 			sm.emit()
@@ -188,9 +188,9 @@ func (sm *StateMachine) handleEvent(ev Event) {
 			// Interrupt the current pipeline.
 			close(sm.cancel)
 			sm.cancel = make(chan struct{})
-			slog.Debug("state: interrupting current turn", "event", ev.Type, "gen", gen, "prev_gen", gen-1)
+			slog.Debug("statemachine_handleEvent_state:_interrupting_current_turn", "event", ev.Type, "gen", gen, "prev_gen", gen-1)
 		} else {
-			slog.Info("state: listening", "event", ev.Type, "gen", gen)
+			slog.Info("statemachine_handleEvent_state:_listening", "event", ev.Type, "gen", gen)
 		}
 
 		sm.busy = true
@@ -285,23 +285,23 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	if preExistingText != "" {
 		// Wake word + command path: no recording or ASR needed.
 		userText = preExistingText
-		slog.Info("state: user said", "text", userText, "gen", gen, "source", "wake_word")
+		slog.Info("statemachine_pipeline_state:_user_said", "text", userText, "gen", gen, "source", "wake_word")
 	} else {
 		// 1. Record until silence (simple energy-based VAD).
 		tRecStart = time.Now() // ⏱ recording start
 		samples := sm.recordWithVAD(cancel)
 		tRecEnd = time.Now() // ⏱ recording end
 		if canceled() {
-			slog.Debug("state: canceled after recording", "gen", gen)
+			slog.Debug("statemachine_pipeline_state:_canceled_after_recording", "gen", gen)
 			return
 		}
 		if len(samples) == 0 {
-			slog.Info("state: no speech detected", "gen", gen)
+			slog.Info("statemachine_pipeline_state:_no_speech_detected", "gen", gen)
 			sm.setState(ModeIdle, EmotionNeutral, "")
 			sm.emit()
 			return
 		}
-		slog.Debug("⏱ [timing] recording", "ms", tRecEnd.Sub(tRecStart).Milliseconds(), "elapsed_ms", tRecEnd.Sub(t0).Milliseconds())
+		slog.Debug("statemachine_pipeline_⏱_[timing]_recording", "ms", tRecEnd.Sub(tRecStart).Milliseconds(), "elapsed_ms", tRecEnd.Sub(t0).Milliseconds())
 
 		// 2. ASR.
 		sm.setState(ModeThinking, EmotionNeutral, "")
@@ -311,18 +311,18 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 		userText, err = sm.asrClient.Transcribe(samples, recorderSampleRate)
 		tASREnd = time.Now() // ⏱ ASR end
 		if canceled() {
-			slog.Debug("state: canceled after ASR", "gen", gen)
+			slog.Debug("statemachine_pipeline_state:_canceled_after_ASR", "gen", gen)
 			return
 		}
 		if err != nil {
-			slog.Error("state: ASR failed", "error", err)
+			slog.Error("statemachine_pipeline_state:_ASR_failed", "error", err)
 			sm.setState(ModeIdle, EmotionNeutral, "")
 			sm.emit()
 			return
 		}
 		userText = trimSpace(userText)
 		if userText == "" {
-			slog.Info("state: ASR returned empty text")
+			slog.Info("statemachine_pipeline_state:_ASR_returned_empty_text")
 			sm.setState(ModeIdle, EmotionNeutral, "")
 			sm.emit()
 			return
@@ -331,15 +331,15 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 		sm.mu.Lock()
 		sm.state.LastUserText = userText
 		sm.mu.Unlock()
-		slog.Info("state: user said", "text", userText, "gen", gen)
-		slog.Debug("⏱ [timing] ASR", "ms", tASREnd.Sub(tASRStart).Milliseconds(), "elapsed_ms", tASREnd.Sub(t0).Milliseconds())
+		slog.Info("statemachine_pipeline_state:_user_said", "text", userText, "gen", gen)
+		slog.Debug("statemachine_pipeline_⏱_[timing]_ASR", "ms", tASREnd.Sub(tASRStart).Milliseconds(), "elapsed_ms", tASREnd.Sub(t0).Milliseconds())
 	}
 
 	// Re-emit so the frontend shows the recognized text during thinking.
 	sm.emit()
 
 	if canceled() {
-		slog.Debug("state: canceled before LLM", "gen", gen)
+		slog.Debug("statemachine_pipeline_state:_canceled_before_LLM", "gen", gen)
 		return
 	}
 
@@ -374,7 +374,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 			}
 			result, err := sm.ttsClient.Synthesize(sentence, 1.0)
 			if err != nil {
-				slog.Error("state: TTS failed for sentence", "sentence", sentence, "error", err)
+				slog.Error("statemachine_pipeline_state:_TTS_failed_for_sentence", "sentence", sentence, "error", err)
 				ttsErrs <- err
 				return
 			}
@@ -419,7 +419,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 		case <-cancel:
 			close(sentenceCh)
 			<-ttsDone
-			slog.Debug("state: canceled during LLM", "gen", gen)
+			slog.Debug("statemachine_pipeline_state:_canceled_during_LLM", "gen", gen)
 			return
 		}
 	}
@@ -430,7 +430,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	if utf8.RuneCountInString(remaining) >= 2 {
 		sentenceCh <- remaining
 	} else {
-		slog.Debug("state: discarding short sentence tail", "text", remaining, "runes", utf8.RuneCountInString(remaining))
+		slog.Debug("statemachine_pipeline_state:_discarding_short_sentence_tail", "text", remaining, "runes", utf8.RuneCountInString(remaining))
 	}
 
 	// Close sentenceCh so the TTS goroutine finishes.
@@ -440,7 +440,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	// Check for TTS errors.
 	select {
 	case err := <-ttsErrs:
-		slog.Error("state: TTS failed", "error", err)
+		slog.Error("statemachine_pipeline_state:_TTS_failed", "error", err)
 		sm.setState(ModeIdle, EmotionNeutral, "")
 		sm.emit()
 		return
@@ -448,12 +448,12 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	}
 
 	if canceled() {
-		slog.Debug("state: canceled after TTS", "gen", gen)
+		slog.Debug("statemachine_pipeline_state:_canceled_after_TTS", "gen", gen)
 		return
 	}
 
 	if len(allSamples) == 0 {
-		slog.Warn("state: TTS produced no audio")
+		slog.Warn("statemachine_pipeline_state:_TTS_produced_no_audio")
 		sm.setState(ModeIdle, EmotionNeutral, "")
 		sm.emit()
 		return
@@ -475,23 +475,23 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	tLLMEnd := tLLMLastToken
 
 	if llmFirstTokenSet {
-		slog.Debug("⏱ [timing] LLM",
+		slog.Debug("statemachine_pipeline_⏱_[timing]_LLM",
 			"first_token_ms", tLLMFirstToken.Sub(tLLMStart).Milliseconds(),
 			"stream_done_ms", tLLMEnd.Sub(tLLMStart).Milliseconds(),
 			"elapsed_ms", tLLMEnd.Sub(t0).Milliseconds())
 	} else {
-		slog.Debug("⏱ [timing] LLM",
+		slog.Debug("statemachine_pipeline_⏱_[timing]_LLM",
 			"stream_done_ms", tLLMEnd.Sub(tLLMStart).Milliseconds(),
 			"elapsed_ms", tLLMEnd.Sub(t0).Milliseconds())
 	}
 
-	slog.Debug("⏱ [timing] TTS",
+	slog.Debug("statemachine_pipeline_⏱_[timing]_TTS",
 		"ms", tTTSEnd.Sub(tTTSStart).Milliseconds(),
 		"elapsed_ms", tTTSEnd.Sub(t0).Milliseconds())
 
 	// 4. Speak — drive mouth visemes on a fixed rhythm while audio plays.
 	if sm.audioPlayer == nil {
-		slog.Warn("state: audio player is nil, skipping playback")
+		slog.Warn("statemachine_pipeline_state:_audio_player_is_nil,_skipping_playback")
 		sm.mu.Lock()
 		sm.state.IsSpeaking = false
 		sm.mu.Unlock()
@@ -509,7 +509,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	tPlayStart := time.Now() // ⏱ playback start
 	player, err := sm.audioPlayer.Play(allSamples)
 	if err != nil {
-		slog.Error("state: audio play error", "error", err)
+		slog.Error("statemachine_pipeline_state:_audio_play_error", "error", err)
 		sm.mu.Lock()
 		sm.state.IsSpeaking = false
 		sm.mu.Unlock()
@@ -542,7 +542,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	if tLLMEnd.After(tTTSEnd) {
 		overlapEnd = tLLMEnd
 	}
-	slog.Debug("⏱ [timing] playback",
+	slog.Debug("statemachine_pipeline_⏱_[timing]_playback",
 		"ms", tPlayEnd.Sub(tPlayStart).Milliseconds(),
 		"total_ms", tPlayEnd.Sub(t0).Milliseconds(),
 		"rec_pct", float64(tRecEnd.Sub(tRecStart).Milliseconds())/float64(tPlayEnd.Sub(t0).Milliseconds())*100,
@@ -575,8 +575,8 @@ func (sm *StateMachine) speakWithCancel(player *oto.Player, cancel <-chan struct
 	// Viseme cycle — loop through these shapes while speaking.
 	cycle := []VisemeName{VisemeA, VisemeI, VisemeU, VisemeE, VisemeO}
 	cycleIdx := 0
-	openMs := 120  // how long each open-mouth shape lasts
-	closeMs := 60  // how long the mouth stays closed between shapes
+	openMs := 120 // how long each open-mouth shape lasts
+	closeMs := 60 // how long the mouth stays closed between shapes
 
 	send := func(v VisemeName, w float64) {
 		select {
@@ -594,14 +594,14 @@ func (sm *StateMachine) speakWithCancel(player *oto.Player, cancel <-chan struct
 	for player.IsPlaying() {
 		select {
 		case <-cancel:
-			slog.Debug("state: playback interrupted by user")
+			slog.Debug("statemachine_speakWithCancel_state:_playback_interrupted_by_user")
 			player.Pause()
 			return
 		default:
 		}
 
 		if err := player.Err(); err != nil {
-			slog.Error("state: audio play error", "error", err)
+			slog.Error("statemachine_speakWithCancel_state:_audio_play_error", "error", err)
 			return
 		}
 
@@ -636,7 +636,7 @@ func (sm *StateMachine) speakWithCancel(player *oto.Player, cancel <-chan struct
 func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 	chunks, err := sm.recorder.Start()
 	if err != nil {
-		slog.Error("state: recording failed", "error", err)
+		slog.Error("statemachine_recordWithVAD_state:_recording_failed", "error", err)
 		return nil
 	}
 	// The recorder is persistent — Start() returns a fresh subscriber
@@ -644,7 +644,7 @@ func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 	// stays alive across recordings.
 
 	const (
-		speechThreshold = 0.01                 // RMS above this counts as speech
+		speechThreshold = 0.01                    // RMS above this counts as speech
 		silenceDuration = 1200 * time.Millisecond // silence to end the turn
 		maxDuration     = 30 * time.Second        // hard safety cap
 	)
@@ -657,7 +657,7 @@ func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 	for {
 		select {
 		case <-cancel:
-			slog.Debug("state: recording canceled")
+			slog.Debug("statemachine_recordWithVAD_state:_recording_canceled")
 			return all
 		case chunk, ok := <-chunks:
 			if !ok {
@@ -674,7 +674,7 @@ func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 			rms := rmsOf(chunk)
 			if rms > speechThreshold {
 				if !speaking {
-					slog.Debug("state: speech started", "rms", rms)
+					slog.Debug("statemachine_recordWithVAD_state:_speech_started", "rms", rms)
 					speaking = true
 				}
 				lastSpeech = time.Now()
@@ -682,13 +682,13 @@ func (sm *StateMachine) recordWithVAD(cancel <-chan struct{}) []float32 {
 
 			// Stop when speech started and silence persisted long enough.
 			if speaking && time.Since(lastSpeech) >= silenceDuration {
-				slog.Debug("state: silence detected, stopping recording")
+				slog.Debug("statemachine_recordWithVAD_state:_silence_detected,_stopping_recording")
 				return all
 			}
 
 			// Hard safety cap.
 			if time.Since(start) >= maxDuration {
-				slog.Debug("state: max recording duration reached")
+				slog.Debug("statemachine_recordWithVAD_state:_max_recording_duration_reached")
 				return all
 			}
 		}

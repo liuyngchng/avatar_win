@@ -375,9 +375,19 @@ try {
     # compile, link, asm, etc.) on every build.
     $garbleArgs = @("run", "mvdan.cc/garble@v0.14.2", "-literals", "build")
     if ($GO_TAGS) { $garbleArgs += $GO_TAGS }
-    $garbleArgs += "-ldflags=$GO_LDFLAGS", "-o", $exePath, "."
-    $p = Start-Process -FilePath "go" -ArgumentList $garbleArgs -NoNewWindow -Wait -PassThru
-    if ($p.ExitCode -ne 0) { throw "go build failed" }
+    $garbleArgs += "-ldflags=""$GO_LDFLAGS""", "-o", $exePath, "."
+    $buildOut = Join-Path $env:TEMP "avatar-build-out.txt"
+    $buildErr = Join-Path $env:TEMP "avatar-build-err.txt"
+    $p = Start-Process -FilePath "go" -ArgumentList $garbleArgs -NoNewWindow -Wait -PassThru `
+        -RedirectStandardOutput $buildOut -RedirectStandardError $buildErr
+    if ($p.ExitCode -ne 0) {
+        Write-Host "`n── BUILD STDERR ─────────────────────────────" -ForegroundColor Red
+        if (Test-Path $buildErr) { Get-Content $buildErr | ForEach-Object { Write-Host "  $_" -ForegroundColor Red } }
+        Write-Host "── BUILD STDOUT ─────────────────────────────" -ForegroundColor Yellow
+        if (Test-Path $buildOut) { Get-Content $buildOut | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow } }
+        Write-Host "──────────────────────────────────────────────`n" -ForegroundColor Red
+        throw "go build failed"
+    }
 } finally {
     Remove-Item Env:\GOTOOLCHAIN -ErrorAction SilentlyContinue
     Remove-Item Env:\GOGARBLE -ErrorAction SilentlyContinue

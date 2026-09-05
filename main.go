@@ -41,45 +41,45 @@ func main() {
 	if err != nil {
 		// Still try to continue — log to stderr only.
 		logging.Init(os.Stderr, slog.LevelInfo)
-		slog.Error("logfile: init failed", "error", err)
+		slog.Error("main_main_logfile:_init_failed", "error", err)
 	} else {
 		defer logF.Close()
 		logging.Init(logF, slog.LevelInfo)
 	}
 
-	slog.Info("=== Avatar PC starting ===")
+	slog.Info("main_main_===_Avatar_PC_starting_===")
 
 	// Step 1: Load configuration from cfg.yml (optional).
-	slog.Info("main: [1/5] loading config...")
+	slog.Info("main_main_main:_[1/5]_loading_config...")
 	cfg, err := config.Load()
 	if err != nil {
 		// cfg.yml exists but is malformed — that's a real error.
-		slog.Error("main: failed to load config", "error", err)
+		slog.Error("main_main_main:_failed_to_load_config", "error", err)
 		os.Exit(1)
 	}
 	if cfg == nil {
 		// No cfg.yml found — run in "display only" mode. The avatar renders
 		// and the window works, but tapping will log a clear error instead
 		// of talking. logging defaults to Info, so no level setup needed.
-		slog.Info("main: [1/5] cfg.yml NOT found — running display-only (talking disabled)")
+		slog.Info("main_main_main:_[1/5]_cfg.yml_NOT_found_—_running_display-only_(talking_disabled)")
 	} else {
 		// Apply the configured log level as early as possible so subsequent
 		// init messages honor it. ParseLevel returns Info on unknown input.
 		logging.SetLevel(logging.ParseLevel(cfg.Log.Level))
-		slog.Info("main: [1/5] config loaded OK", "log.level", cfg.Log.Level)
-		slog.Info("main: " + config.ProxyDesc(cfg.Proxy, cfg.ProxyDisabled))
+		slog.Info("main_main_main:_[1/5]_config_loaded_OK", "log.level", cfg.Log.Level)
+		slog.Info("main_main_main:_" + config.ProxyDesc(cfg.Proxy, cfg.ProxyDisabled))
 	}
 
 	// Step 2: Create the renderer window FIRST — the user should see the
 	// VRM avatar as soon as possible, even if audio/network init fails.
-	slog.Info("main: [2/5] creating renderer window...")
+	slog.Info("main_main_main:_[2/5]_creating_renderer_window...")
 	r, err := renderer.New(webAssets)
 	if err != nil {
-		slog.Error("main: failed to create renderer", "error", err)
+		slog.Error("main_main_main:_failed_to_create_renderer", "error", err)
 		os.Exit(1)
 	}
 	defer r.Close()
-	slog.Info("main: [2/5] renderer window created OK")
+	slog.Info("main_main_main:_[2/5]_renderer_window_created_OK")
 
 	// Step 3: Initialize ASR, LLM, TTS clients.
 	//   - ASR and TTS are created by asr.Init/tts.Init, which are selected
@@ -93,73 +93,73 @@ func main() {
 	var ttsClient tts.Synthesizer
 
 	if cfg != nil {
-		slog.Info("main: [3/5] initializing clients...")
+		slog.Info("main_main_main:_[3/5]_initializing_clients...")
 
 		// ── ASR ────────────────────────────────────
 		asrClient, err = asr.Init(cfg)
 		if err != nil {
-			slog.Error("main: ASR init failed", "error", err)
+			slog.Error("main_main_main:_ASR_init_failed", "error", err)
 			os.Exit(1)
 		}
 		defer asrClient.Close()
-		slog.Info("main: [3/5] ASR 模式: " + asr.Mode() + " (" + asr.Desc(cfg) + ")")
+		slog.Info("main_main_main:_[3/5]_ASR_模式:_" + asr.Mode() + " (" + asr.Desc(cfg) + ")")
 
 		// ── LLM (always online) ───────────────────
 		if cfg.LLM.URL == "" {
-			slog.Error("main: LLM init failed: cfg.yml llm.url is required")
+			slog.Error("main_main_main:_LLM_init_failed:_cfg.yml_llm.url_is_required")
 			os.Exit(1)
 		}
 		llmClient = llm.NewClient(cfg.LLM.URL, cfg.LLM.Model, cfg.APIKey, cfg.LLM.Name, cfg.LLM.MaxTokens, config.ProxyFunc(cfg.Proxy, cfg.ProxyDisabled))
 		defer llmClient.Close()
-		slog.Info("main: [3/5] LLM", "endpoint", cfg.LLM.URL, "model", cfg.LLM.Model)
+		slog.Info("main_main_main:_[3/5]_LLM", "endpoint", cfg.LLM.URL, "model", cfg.LLM.Model)
 
 		// ── TTS ────────────────────────────────────
 		ttsClient, err = tts.Init(cfg)
 		if err != nil {
-			slog.Error("main: TTS init failed", "error", err)
+			slog.Error("main_main_main:_TTS_init_failed", "error", err)
 			os.Exit(1)
 		}
 		defer ttsClient.Close()
-		slog.Info("main: [3/5] TTS 模式: " + tts.Mode() + " (" + tts.Desc(cfg) + ")")
+		slog.Info("main_main_main:_[3/5]_TTS_模式:_" + tts.Mode() + " (" + tts.Desc(cfg) + ")")
 	} else {
-		slog.Info("main: [3/5] skipped — no cfg.yml (talking disabled)")
+		slog.Info("main_main_main:_[3/5]_skipped_—_no_cfg.yml_(talking_disabled)")
 	}
 
 	// Step 4: Initialize audio player (may block briefly on some systems).
-	slog.Info("main: [4/5] initializing audio player...")
+	slog.Info("main_main_main:_[4/5]_initializing_audio_player...")
 	var player *audio.Player
 	if cfg != nil {
 		player, err = audio.NewPlayer(ttsClient.SampleRate())
 		if err != nil {
-			slog.Warn("main: [4/5] audio player init failed (will continue)", "error", err)
+			slog.Warn("main_main_main:_[4/5]_audio_player_init_failed_(will_continue)", "error", err)
 		} else {
-			slog.Info("main: [4/5] waiting for audio player ready...")
+			slog.Info("main_main_main:_[4/5]_waiting_for_audio_player_ready...")
 			player.WaitReady()
-			slog.Info("main: [4/5] audio player ready OK")
+			slog.Info("main_main_main:_[4/5]_audio_player_ready_OK")
 			defer player.Close()
 		}
 	} else {
-		slog.Info("main: [4/5] skipped — no cfg.yml (talking disabled)")
+		slog.Info("main_main_main:_[4/5]_skipped_—_no_cfg.yml_(talking_disabled)")
 	}
 
 	// Initialize audio recorder.
 	recorder := audio.NewRecorder()
-	slog.Info("main: [4/5] audio recorder created OK")
+	slog.Info("main_main_main:_[4/5]_audio_recorder_created_OK")
 	defer recorder.Stop()
 
 	// Step 5: Determine idle animation flag and wake word.
-	idleAnims := true                       // default: enabled
-	wakeWord := ""                          // default: "小然" (applied in brain)
-	conversationIdle := 3 * time.Second     // default multi-turn idle window
+	idleAnims := true                   // default: enabled
+	wakeWord := ""                      // default: "小然" (applied in brain)
+	conversationIdle := 3 * time.Second // default multi-turn idle window
 	if cfg != nil {
 		idleAnims = cfg.Avatar.IdleAnimations()
 		wakeWord = cfg.WakeWord
 		conversationIdle = cfg.Avatar.ConversationIdle()
 	}
-	slog.Info("main: idle animations", "enabled", idleAnims, "wake_word", wakeWord, "conversation_idle_ms", conversationIdle.Milliseconds())
+	slog.Info("main_main_main:_idle_animations", "enabled", idleAnims, "wake_word", wakeWord, "conversation_idle_ms", conversationIdle.Milliseconds())
 
 	// Step 5: Start the brain (state machine) and event loops.
-	slog.Info("main: [5/5] starting brain state machine...")
+	slog.Info("main_main_main:_[5/5]_starting_brain_state_machine...")
 	sm := brain.NewStateMachine(ttsClient, asrClient, llmClient, player, recorder, idleAnims, wakeWord, conversationIdle)
 
 	// Start the FSM loop.
@@ -193,28 +193,28 @@ func main() {
 		}
 	}()
 
-	slog.Info("main: all subsystems started, waiting for exit signal...")
+	slog.Info("main_main_main:_all_subsystems_started,_waiting_for_exit_signal...")
 
 	// Print a concise, human-readable startup summary so the user can see at
 	// a glance what backend each subsystem is using and whether a proxy is
 	// in effect — without having to scroll through the detailed logs above.
-	slog.Info("============================================================")
-	slog.Info("启动信息汇总 (Startup Summary)")
+	slog.Info("main_main_============================================================")
+	slog.Info("main_main_启动信息汇总_(Startup_Summary)")
 	if cfg == nil {
-		slog.Info("  配置: 未找到 cfg.yml — 仅显示模式 (不说话)")
-		slog.Info("  代理: 无")
-		slog.Info("  ASR : 未启用")
-		slog.Info("  TTS : 未启用")
-		slog.Info("  LLM : 未启用")
+		slog.Info("main_main___配置:_未找到_cfg.yml_—_仅显示模式_(不说话)")
+		slog.Info("main_main___代理:_无")
+		slog.Info("main_main___ASR_:_未启用")
+		slog.Info("main_main___TTS_:_未启用")
+		slog.Info("main_main___LLM_:_未启用")
 	} else {
-		slog.Info("  代理: " + config.ProxyDesc(cfg.Proxy, cfg.ProxyDisabled))
-		slog.Info("  ASR : " + asr.Mode() + " | " + asr.Desc(cfg))
-		slog.Info("  TTS : " + tts.Mode() + " | " + tts.Desc(cfg))
+		slog.Info("main_main___代理:_" + config.ProxyDesc(cfg.Proxy, cfg.ProxyDisabled))
+		slog.Info("main_main___ASR_:_" + asr.Mode() + " | " + asr.Desc(cfg))
+		slog.Info("main_main___TTS_:_" + tts.Mode() + " | " + tts.Desc(cfg))
 		if llmClient != nil {
-			slog.Info("  LLM : 在线", "model", cfg.LLM.Model)
+			slog.Info("main_main___LLM_:_在线", "model", cfg.LLM.Model)
 		}
 	}
-	slog.Info("============================================================")
+	slog.Info("main_main_============================================================")
 
 	// Wait for one of:
 	//   - User closes the window    → r.Done()
@@ -224,8 +224,8 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case <-r.Done():
-		slog.Info("main: window closed, shutting down...")
+		slog.Info("main_main_main:_window_closed,_shutting_down...")
 	case sig := <-sigCh:
-		slog.Info("main: received signal, shutting down...", "signal", sig)
+		slog.Info("main_main_main:_received_signal,_shutting_down...", "signal", sig)
 	}
 }
