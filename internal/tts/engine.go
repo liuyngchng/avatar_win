@@ -1,5 +1,3 @@
-//go:build offline
-
 // Package tts wraps the sherpa-onnx offline TTS engine for
 // Matcha-TTS + vocos Chinese speech synthesis.
 package tts

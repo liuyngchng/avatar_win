@@ -7,7 +7,9 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
-    #canvas { display: block; cursor: default; }
+    #canvas { display: block; opacity: 0; transition: opacity 1s ease-out; }
+    #canvas.visible { opacity: 1; }
+    #canvas.fading { opacity: 0; }
 
     /* Loading overlay */
     .loading {
@@ -89,9 +91,6 @@
     let responseText = '';        // the avatar's reply text (shown in subtitle while speaking)
     let lastUserText = '';        // what the user said (ASR result), persisted across states
     let lastResponse = '';        // the last full TTS reply, persisted across states
-    let idleAnimState = 'resting';  // 'resting' | 'playing'
-    let idleRestTimer = 0;          // how long we've been resting
-    let idleRestDuration = 0;       // how long to rest before next anim
     let idleAnimIndex = -1;         // which animation is playing currently
 
     // ─── FBX Animation Mixer ───────────────────────────────
@@ -107,7 +106,7 @@
     // VRM1 uses: aa, ih, ou, ee, oh (not A/I/U/E/O)
     let visemeTargets = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
     let visemeCurrent = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
-    let visemeBlendSpeed = 30.0; // how fast visemes transition (snappy)
+    let visemeBlendSpeed = 8.0; // how fast visemes transition
 
     // Blink state
     let blinkTimer = 0;
@@ -237,7 +236,7 @@
 
       // Set the natural standing pose (arms down, fingers curled).
       // This is the default idle pose; animations drive bones from the
-      // normalized T-pose (identity) baseline, and stopIdleAnimation()
+      // normalized T-pose (identity) baseline, and stopIdleAnimations()
       // restores this standing pose after each animation / turn.
       setArmPose();
 
@@ -251,6 +250,7 @@
       console.log('Expressions:', Object.keys(vrm.expressionManager?.expressionMap || {}));
       console.log('Idle animations:', idleClipNames);
       loadEl.style.display = 'none';
+      canvas.classList.add('visible');
       updateStatus();
 
       // Auto-fit the window to the avatar's bounding box so the entire body
@@ -395,6 +395,7 @@
 
       console.log('Placeholder avatar created');
       document.getElementById('loading').style.display = 'none';
+      canvas.classList.add('visible');
       updateStatus();
 
       // Auto-fit the window to the avatar's bounding box.
@@ -487,7 +488,19 @@
         updateVRMVisemes(dt);
         updateVRMIdleMicro(dt);
         // Idle animation system — runs when idle and idleAnimEnabled is true.
-        if (currentMode === 'idle') updateIdleAnimation(dt);
+        if (currentMode === 'idle') {
+          if (idleAnimEnabled && idleMixer && idleClipNames.length > 0) {
+            if (!idleAnimActive && !isSpeaking) {
+              idleAnimTimer += dt;
+              if (idleAnimTimer >= IDLE_ANIM_DELAY) {
+                startIdleAnimations();
+              }
+            }
+            if (idleAnimActive && idleAnimNextSwitch > 0 && idleTime >= idleAnimNextSwitch) {
+              playRandomIdleAnim();
+            }
+          }
+        }
         // FBX animation mixer (drives idle clips).
         if (idleMixer) idleMixer.update(dt);
         updateWindowMove(dt);
@@ -588,7 +601,7 @@
       if (!vrm?.scene) return;
       // If a procedural idle animation is playing, skip the default micro-movement
       // so the two don't fight each other.
-      if (idleAnimEnabled && idleAnimState === 'playing') return;
+      if (idleAnimEnabled && idleAnimActive) return;
 
       const t = idleTime;
       // Subtle breathing (layered on top of the fixed root height)
@@ -772,19 +785,38 @@
         'Texting While Standing': '/models/animations/TextingWhileStanding.fbx',
       };
 
-      const clips = {};
       const names = Object.keys(files);
-      for (const name of names) {
-        try {
-          console.log('Preloading:', name);
-          clips[name] = await loadMixamoClip(files[name], vrmModel);
-        } catch (err) {
-          console.error('Failed to preload', name, ':', err.message);
+      const results = await Promise.allSettled(
+        names.map(name =>
+          loadMixamoClip(files[name], vrmModel).then(clip => ({ name, clip }))
+        )
+      );
+
+      const clips = {};
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          const { name, clip } = result.value;
+          clips[name] = clip;
+          console.log('Preloaded:', name);
+        } else {
+          console.error('Failed to preload animation:', result.reason?.message);
         }
       }
       console.log('Preloaded', Object.keys(clips).length, 'idle animations');
       return clips;
     }
+
+    // ─── Idle Animation System ─────────────────────────
+    // Mixamo FBX animations are retargeted to the VRM humanoid skeleton
+    // and played via AnimationMixer. Each clip loops continuously, and
+    // every 4-8 seconds we crossfade to a new random clip. This produces
+    // seamless natural motion without rest gaps.
+    const IDLE_ANIM_DELAY = 10;        // seconds before starting idle animations
+    const animCrossFadeDuration = 0.35; // seconds for cross-fade
+
+    let idleAnimTimer = 0;            // counts up when in idle mode with no animation
+    let idleAnimActive = false;       // true when random idle animations are playing
+    let idleAnimNextSwitch = 0;       // idleTime when we should crossfade to next clip
 
     // ─── Idle animation playback control ────────────────────
     // Pick a random clip (different from the current one).
@@ -796,25 +828,68 @@
       return idx;
     }
 
-    // Start playing a random idle clip.
-    function startIdleAnimation() {
-      if (!idleAnimEnabled || !idleMixer || idleClipNames.length === 0) return;
+    // Start the idle animation loop. Called after the initial delay.
+    function startIdleAnimations() {
+      if (idleAnimActive) return;
+      if (!idleMixer || idleClipNames.length === 0) return;
+      idleAnimActive = true;
+      playRandomIdleAnim();
+      console.log('[FBX] 空闲动画开始播放');
+    }
+
+    // Stop all idle animations and restore the default standing pose.
+    function stopIdleAnimations(immediate) {
+      if (!idleAnimActive) return;
+      idleAnimActive = false;
+      idleAnimNextSwitch = 0;
+
+      if (idleCurrentAction && idleCurrentAction.isRunning()) {
+        if (immediate) {
+          idleCurrentAction.stop();
+        } else {
+          idleCurrentAction.fadeOut(animCrossFadeDuration);
+        }
+      }
+      idleCurrentAction = null;
+      idleAnimIndex = -1;
+
+      // Defer pose restore until after the fadeOut completes.
+      const delay = immediate ? 0 : animCrossFadeDuration * 1000 + 50;
+      setTimeout(() => {
+        if (!idleAnimActive) {
+          resetToStandingPose();
+        }
+      }, delay);
+
+      console.log('[FBX] 空闲动画停止, 恢复默认站姿');
+    }
+
+    // Pick and play a random animation from the idle pool with crossfade.
+    function playRandomIdleAnim() {
+      if (!idleMixer || !idleAnimActive) return;
 
       idleAnimIndex = pickRandomIdleClip();
       const name = idleClipNames[idleAnimIndex];
       const clip = idleClips[name];
       if (!clip) return;
 
-      idleCurrentAction = idleMixer.clipAction(clip);
-      idleCurrentAction.loop = THREE.LoopOnce;
-      idleCurrentAction.clampWhenFinished = true;
-      // Blend from the current standing pose (arms down) into the new
-      // animation.  We do NOT reset to T-pose first — that would cause a
-      // visible snap every time an animation starts.
-      idleCurrentAction.fadeIn(1.0);
-      idleCurrentAction.play();
+      const action = idleMixer.clipAction(clip);
+      action.loop = THREE.LoopRepeat;
+      action.clampWhenFinished = false;
 
-      idleAnimState = 'playing';
+      if (idleCurrentAction && idleCurrentAction.isRunning()) {
+        action.reset().play();
+        action.crossFadeFrom(idleCurrentAction, animCrossFadeDuration, true);
+      } else {
+        action.reset().play();
+        action.setEffectiveWeight(1.0);
+      }
+      idleCurrentAction = action;
+
+      // Schedule next switch: play for 4-8 seconds.
+      const duration = 4 + Math.random() * 4;
+      idleAnimNextSwitch = idleTime + duration;
+      console.log('[FBX] 播放动画: ' + name + ' (' + duration.toFixed(1) + 's)');
     }
 
     // Restore the natural standing pose (arms down, fingers curled).
@@ -823,50 +898,6 @@
       if (vrm.scene) {
         vrm.scene.position.set(0, AVATAR_Y, 0);
         vrm.scene.rotation.set(0, 0, 0);
-      }
-    }
-
-    // Stop the current idle animation and restore the standing pose.
-    // When immediate is true (e.g. leaving idle mode), stop() is used to
-    // cut the animation instantly; the caller is responsible for setting
-    // the standing pose via resetToStandingPose().
-    // When immediate is false (normal clip end), fadeOut() blends the
-    // bones back to the pre-action state (standing pose) automatically.
-    function stopIdleAnimation(immediate) {
-      if (idleCurrentAction) {
-        if (immediate) {
-          idleCurrentAction.stop();
-        } else {
-          idleCurrentAction.fadeOut(1.0);
-        }
-        idleCurrentAction = null;
-      }
-      // Reset the scene transform (the animation may have shifted the root).
-      if (vrm.scene) {
-        vrm.scene.position.set(0, AVATAR_Y, 0);
-        vrm.scene.rotation.set(0, 0, 0);
-      }
-      idleAnimState = 'resting';
-      idleRestTimer = 0;
-      idleAnimIndex = -1;
-      // Pick a random rest duration between 2 and 5 seconds.
-      idleRestDuration = 2.0 + Math.random() * 3.0;
-    }
-
-    // Called every frame when the avatar is idle. Manages the rest/play cycle.
-    function updateIdleAnimation(dt) {
-      if (!idleAnimEnabled || !idleMixer) return;
-
-      if (idleAnimState === 'resting') {
-        idleRestTimer += dt;
-        if (idleRestTimer >= idleRestDuration) {
-          startIdleAnimation();
-        }
-      } else if (idleAnimState === 'playing') {
-        // Check if the current clip has finished.
-        if (idleCurrentAction && idleCurrentAction.time >= idleCurrentAction.getClip().duration) {
-          stopIdleAnimation();
-        }
       }
     }
 
@@ -1020,6 +1051,10 @@
     window.handleMessage = function(jsonStr) {
       try {
         const msg = JSON.parse(jsonStr);
+        if (msg.cmd === 'fade_out') {
+          fadeOutAvatar();
+          return;
+        }
         if (msg.type === 'viseme') {
           // Viseme lip-sync message
           applyViseme(msg.viseme, msg.weight);
@@ -1038,7 +1073,7 @@
           // Leaving idle: stop any in-progress animation and reset the
           // standing pose (micro-movement may have left scene transforms).
           if (currentMode !== 'idle') {
-            stopIdleAnimation(true);
+            stopIdleAnimations(true);
             resetToStandingPose();
           }
           updateStatus();
@@ -1259,8 +1294,16 @@
       }
     });
 
+    // ─── Fade-out on shutdown ────────────────────────────────
+    function fadeOutAvatar() {
+      canvas.classList.add('fading');
+      console.log('[INFO] 数字人淡出中...');
+    }
+
     // ─── Start ──────────────────────────────────────────────
     initAvatar().then(() => {
+      // Fade the avatar in once everything is ready.
+      canvas.classList.add('visible');
       // Signal to Go that we're ready to receive state messages.
       sendEvent('ready', {});
       animate();

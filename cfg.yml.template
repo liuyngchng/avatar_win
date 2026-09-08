@@ -1,9 +1,11 @@
 # Avatar Desktop — 数字人 API 配置
 # 将此文件放在 avatar.exe 同目录下，启动时自动读取。
 #
-# 在线版（默认构建）：需要配置 asr / tts / llm 的 API 地址和 api_key。
-# 离线版（-tags offline 构建）：ASR/TTS 使用本地模型，asr/tts 配置忽略，
-#   LLM 仍然需要配置 api_key。
+# ASR/TTS 支持在线（DashScope API）与离线（本地 sherpa-onnx 模型）两种模式，
+# 通过 asr.mode / tts.mode 字段在运行时切换（无需重新编译）：
+#   - mode: "online"（默认）：使用阿里云百炼 DashScope 实时 WebSocket API
+#   - mode: "offline"：使用本地模型（models/asr / models/tts）
+# LLM 始终在线，需要配置 llm.url 和 api_key。
 #
 # 接入阿里云百炼 DashScope 实时 WebSocket API：
 #   ASR: Qwen-Audio-3.0-ASR-Flash-Streaming (WebSocket run-task 协议)
@@ -12,6 +14,8 @@
 #   API Key: https://help.aliyun.com/zh/model-studio/get-api-key
 
 asr:
+  # 模式："online"（默认，DashScope API）或 "offline"（本地 SenseVoice 模型）
+  mode: "online"
   # 华北2（北京）: wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference
   url: "wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference"
   model: "qwen-audio-3.0-asr-flash-streaming"
@@ -28,6 +32,8 @@ llm:
   name: "小然"
 
 tts:
+  # 模式："online"（默认，DashScope API）或 "offline"（本地 Matcha-TTS 模型）
+  mode: "online"
   # Qwen-TTS Realtime WebSocket API，北京地域
   url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
   model: "qwen3-tts-flash-realtime"

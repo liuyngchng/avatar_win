@@ -1,5 +1,3 @@
-//go:build offline
-
 // Package asr wraps the sherpa-onnx offline ASR engine for
 // SenseVoiceSmall speech recognition.
 package asr

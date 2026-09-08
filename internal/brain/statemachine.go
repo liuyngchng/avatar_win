@@ -10,6 +10,7 @@ import (
 
 	"github.com/liuyngchng/avatar-desktop-x64/internal/asr"
 	"github.com/liuyngchng/avatar-desktop-x64/internal/audio"
+	"github.com/liuyngchng/avatar-desktop-x64/internal/kws"
 	"github.com/liuyngchng/avatar-desktop-x64/internal/llm"
 	"github.com/liuyngchng/avatar-desktop-x64/internal/tts"
 
@@ -62,8 +63,9 @@ type StateMachine struct {
 	// back to wake-word mode.
 	conversationIdle time.Duration
 
-	// wakeWordConfig is the wake word from cfg.yml (default "小然").
-	wakeWordConfig string
+	// kwsEngine is the local key-word spotter for wake word detection.
+	// nil means wake word detection is disabled (tap-only mode).
+	kwsEngine *kws.Engine
 	// wakeDetector is the background wake-word listener, active while idle.
 	// Guarded by mu.
 	wakeDetector *wakeWordDetector
@@ -80,8 +82,8 @@ func NewStateMachine(
 	llmClient *llm.Client,
 	audioPlayer *audio.Player,
 	recorder audio.Recorder,
+	kwsEngine *kws.Engine,
 	idleAnimationsEnabled bool,
-	wakeWord string,
 	conversationIdle time.Duration,
 ) *StateMachine {
 	if conversationIdle <= 0 {
@@ -101,12 +103,12 @@ func NewStateMachine(
 		llmClient:        llmClient,
 		audioPlayer:      audioPlayer,
 		recorder:         recorder,
+		kwsEngine:        kwsEngine,
 		cancel:           make(chan struct{}),
-		wakeWordConfig:   wakeWord,
 		conversationIdle: conversationIdle,
 	}
 	// Start the wake word detector in the background. It will only activate
-	// when the state machine is idle and API clients are initialized.
+	// when the state machine is idle and KWS is available.
 	sm.startWakeWordDetectorLocked()
 	return sm
 }
@@ -199,11 +201,7 @@ func (sm *StateMachine) handleEvent(ev Event) {
 		sm.setState(ModeListening, EmotionNeutral, "")
 		sm.emit()
 
-		// If the event carries pre-existing text (e.g. wake word followed by
-		// "今天天气怎么样？"), skip recording + ASR and go straight to LLM.
-		preExistingText, _ := ev.Data.(string)
-
-		go sm.pipeline(gen, preExistingText)
+		go sm.pipeline(gen, "" /* preExistingText */)
 	}
 }
 
@@ -349,7 +347,7 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 	// while the LLM keeps generating the next sentence.
 	// Once all LLM tokens are collected, we wait for the final TTS to finish.
 	tLLMStart := time.Now() // ⏱ LLM start
-	llmCh := sm.llmClient.ChatStream(userText)
+	llmCh, llmErrCh := sm.llmClient.ChatStream(userText)
 
 	// Collect all synthesized audio and sentences.
 	var allSamples []float32
@@ -416,6 +414,11 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 					sentenceCh <- sentence
 				}
 			}
+		case err := <-llmErrCh:
+			if err != nil {
+				slog.Warn("statemachine_pipeline_state:_LLM_stream_error", "error", err)
+				// Continue consuming chunkCh until it closes to get partial response.
+			}
 		case <-cancel:
 			close(sentenceCh)
 			<-ttsDone
@@ -461,12 +464,16 @@ func (sm *StateMachine) pipeline(gen int64, preExistingText string) {
 
 	// Reconstruct the full reply text for state display.
 	replyText := strings.Join(allSentences, "")
-	sm.setState(ModeThinking, EmotionHappy, replyText)
+	// Parse emotion tag from the LLM reply (e.g. "[emotion:happy]你好！").
+	emotionStr, cleanReply := llm.ParseEmotion(replyText)
+	emotion := EmotionFromString(emotionStr)
+	sm.setState(ModeThinking, emotion, cleanReply)
 
 	// Record the completed turn in the LLM client's conversation history.
 	// This enables multi-turn context for future requests.
+	// Use cleanReply (emotion tag stripped) so the LLM doesn't see raw tags.
 	if sm.llmClient != nil {
-		sm.llmClient.RecordTurn(userText, replyText)
+		sm.llmClient.RecordTurn(userText, cleanReply)
 	}
 
 	// LLM timing: first_token = when we got the first chunk, last_token = when the stream ended.

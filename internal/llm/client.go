@@ -1,9 +1,11 @@
-// Package llm provides a chat client for an OpenAI-compatible HTTP API.
+// Package llm provides an OpenAI-compatible chat completions client with
+// SSE streaming support.
 package llm
 
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -46,22 +48,28 @@ func NewClient(baseURL, model, apiKey, name string, maxTokens int, proxyFunc fun
 		maxTokens = defaultMaxTokens
 	}
 	now := time.Now()
+	systemPrompt := fmt.Sprintf(
+		"今天是%s %s。你是一个语音助手，名字叫「%s」。用口语化的中文回复，自然友好、直接明了。"+
+			"闲聊或简单问题控制在1-3句话（80字以内）；"+
+			"知识类问题可以适当展开解释，但保持简洁，不超过150字。"+
+			"围绕用户的问题回答，不要偏离话题。"+
+			"这是一个多轮对话，记住之前聊过的话题，保持一致的语气。"+
+			"回复时可以在开头用[emotion:表情]标签标注情绪，可选表情：neutral/happy/angry/sad/surprised/relaxed。"+
+			"例如：[emotion:happy]你好呀！今天天气真不错！",
+		now.Format("2006年1月2日"), weekdayCN(now.Weekday()), name)
 	return &Client{
 		baseURL:   baseURL,
 		model:     model,
 		apiKey:    apiKey,
 		maxTokens: maxTokens,
-		system: fmt.Sprintf(
-			"今天是%s %s。你是一个语音助手，名字叫「%s」。用口语化的中文回复，自然友好、直接明了。"+
-				"闲聊或简单问题控制在1-3句话（80字以内）；"+
-				"知识类问题可以适当展开解释，但保持简洁，不超过150字。"+
-				"围绕用户的问题回答，不要偏离话题。"+
-				"这是一个多轮对话，记住之前聊过的话题，保持一致的语气。",
-			now.Format("2006年1月2日"), weekdayCN(now.Weekday()), name),
+		system:    systemPrompt,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 			Transport: &http.Transport{
 				Proxy: proxyFunc,
+				// The intranet API uses a self-signed TLS certificate;
+				// skip verification (same as `curl -k`).
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 			},
 		},
 	}
@@ -222,18 +230,22 @@ func (c *Client) chat(messages []chatMessage) (string, error) {
 }
 
 // ChatStream sends a user message and returns a channel that receives text
-// chunks as they arrive from the streaming API. The channel is closed when
-// the stream ends. The caller should drain the channel until it's closed.
+// chunks as they arrive from the streaming API, and an error channel that
+// receives any error that occurs during the stream. The chunk channel is
+// closed when the stream ends. The caller should drain the chunk channel
+// until it's closed, then check the error channel.
 //
 // The caller MUST call RecordTurn(userText, replyText) after consuming the
 // stream to store the conversation history for future requests.
-func (c *Client) ChatStream(userText string) <-chan string {
+func (c *Client) ChatStream(userText string) (<-chan string, <-chan error) {
 	ch := make(chan string, 16)
+	errCh := make(chan error, 1)
 
 	messages := c.buildMessages(userText)
 
 	go func() {
 		defer close(ch)
+		defer close(errCh)
 		t0 := time.Now()
 
 		body := chatRequest{
@@ -247,13 +259,13 @@ func (c *Client) ChatStream(userText string) <-chan string {
 
 		jsonBody, err := json.Marshal(body)
 		if err != nil {
-			slog.Error("client_ChatStream_llm:_marshal_stream_request", "error", err)
+			errCh <- fmt.Errorf("llm: marshal stream request: %w", err)
 			return
 		}
 
 		req, err := http.NewRequest("POST", c.baseURL, bytes.NewReader(jsonBody))
 		if err != nil {
-			slog.Error("client_ChatStream_llm:_create_stream_request", "error", err)
+			errCh <- fmt.Errorf("llm: create stream request: %w", err)
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -265,14 +277,14 @@ func (c *Client) ChatStream(userText string) <-chan string {
 		slog.Debug("client_ChatStream_llm:_POST", "url", c.baseURL, "model", c.model, "stream", true)
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			slog.Error("client_ChatStream_llm:_stream_http_request", "error", err)
+			errCh <- fmt.Errorf("llm: stream http request: %w", err)
 			return
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-			slog.Error("client_ChatStream_llm:_stream_HTTP_error", "status", resp.StatusCode, "body", string(errBody))
+			errCh <- fmt.Errorf("llm: HTTP %d: %s", resp.StatusCode, string(errBody))
 			return
 		}
 
@@ -303,6 +315,8 @@ func (c *Client) ChatStream(userText string) <-chan string {
 			}
 
 			if len(chunk.Choices) > 0 {
+				// Skip reasoning tokens (e.g. DeepSeek thinking),
+				// only collect actual content.
 				text := chunk.Choices[0].Delta.Content
 				if text != "" {
 					if firstToken {
@@ -316,17 +330,40 @@ func (c *Client) ChatStream(userText string) <-chan string {
 		}
 
 		if err := scanner.Err(); err != nil {
-			slog.Error("client_ChatStream_llm:_stream_scanner", "error", err)
+			errCh <- fmt.Errorf("llm: SSE read error: %w", err)
 		}
 
 		slog.Debug("client_ChatStream_llm:_stream_reply", "chars", totalChars, "total_ms", time.Since(t0).Milliseconds())
 	}()
 
-	return ch
+	return ch, errCh
 }
 
 // weekdayCN returns the Chinese name for a time.Weekday.
 func weekdayCN(d time.Weekday) string {
 	names := [...]string{"星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"}
 	return names[d]
+}
+
+// ParseEmotion extracts the emotion tag from the beginning of the response text.
+// Returns the emotion and the cleaned text. If no tag is found, returns
+// "neutral" and the original text.
+func ParseEmotion(text string) (emotion string, cleanText string) {
+	text = strings.TrimSpace(text)
+	const prefix = "[emotion:"
+	if strings.HasPrefix(text, prefix) {
+		end := strings.Index(text, "]")
+		if end > 0 {
+			raw := text[len(prefix):end]
+			cleanText = strings.TrimSpace(text[end+1:])
+			switch raw {
+			case "neutral", "happy", "angry", "sad", "surprised", "relaxed":
+				return raw, cleanText
+			default:
+				// Unknown tag: still strip it, keep emotion neutral.
+				return "neutral", cleanText
+			}
+		}
+	}
+	return "neutral", text
 }

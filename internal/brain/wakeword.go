@@ -3,28 +3,26 @@ package brain
 import (
 	"log/slog"
 	"strings"
-	"time"
+
+	"github.com/liuyngchng/avatar-desktop-x64/internal/kws"
 )
 
-// wakeWordDetector continuously listens for the wake word in background audio
-// and fires wake_detected events when the user says the wake word. It runs in
-// its own goroutine and is managed by the state machine.
+// wakeWordDetector continuously listens for the wake word using local KWS
+// (Zipformer model) and fires wake_detected events when the wake word is
+// detected. It runs in its own goroutine and is managed by the state machine.
 //
 // When the wake word is detected, the detector stops itself and the state
-// machine starts a full conversation pipeline. If the user said additional
-// words after the wake word (e.g. "小然，今天天气怎么样？"), those words are
-// passed through so the pipeline can skip recording + ASR and go straight to
-// the LLM.
+// machine starts a full conversation pipeline.
 type wakeWordDetector struct {
-	sm       *StateMachine
-	wakeWord string
-	done     chan struct{}
+	sm        *StateMachine
+	kwsEngine *kws.Engine
+	done      chan struct{}
 }
 
 // startWakeWordDetector begins listening for the wake word. It is a no-op if
-// no API clients are available (display-only mode). Caller must hold sm.mu.
+// no KWS engine is available (tap-only mode). Caller must hold sm.mu.
 func (sm *StateMachine) startWakeWordDetectorLocked() {
-	if sm.asrClient == nil || sm.recorder == nil {
+	if sm.kwsEngine == nil || sm.recorder == nil {
 		return
 	}
 	// Already running — don't start a second one.
@@ -32,15 +30,10 @@ func (sm *StateMachine) startWakeWordDetectorLocked() {
 		return
 	}
 
-	wakeWord := "小然"
-	if sm.wakeWordConfig != "" {
-		wakeWord = sm.wakeWordConfig
-	}
-
 	d := &wakeWordDetector{
-		sm:       sm,
-		wakeWord: wakeWord,
-		done:     make(chan struct{}),
+		sm:        sm,
+		kwsEngine: sm.kwsEngine,
+		done:      make(chan struct{}),
 	}
 	sm.wakeDetector = d
 
@@ -73,127 +66,67 @@ func (d *wakeWordDetector) stop() {
 	}
 }
 
+// run is the main loop of the wake word detector. It subscribes to the
+// recorder's audio stream and feeds every chunk to the local KWS engine.
+// When KWS detects the keyword, a wake_detected event is fired and the
+// detector exits.
 func (d *wakeWordDetector) run() {
-	slog.Info("wakeword_run_wakeword:_listening", "wake_word", d.wakeWord)
+	slog.Info("wakeword_run_wakeword:_kws_listening")
+
+	// Subscribe to the recorder's audio stream. The recorder supports
+	// multiple concurrent subscribers, so the pipeline can record
+	// simultaneously without conflict.
+	chunks, err := d.sm.recorder.Start()
+	if err != nil {
+		slog.Error("wakeword_run_wakeword:_recorder_start_failed", "error", err)
+		return
+	}
 
 	for {
 		select {
 		case <-d.done:
 			slog.Info("wakeword_run_wakeword:_stopped")
 			return
-		default:
-		}
 
-		// Listen for speech via VAD.
-		samples := d.listenForSpeech()
-		if len(samples) == 0 {
-			continue
-		}
-
-		// Run ASR on the captured audio to check for the wake word.
-		text, err := d.sm.asrClient.Transcribe(samples, recorderSampleRate)
-		if err != nil {
-			slog.Error("wakeword_run_wakeword:_ASR_failed", "error", err)
-			continue
-		}
-		text = strings.TrimSpace(text)
-		if text == "" {
-			continue
-		}
-
-		slog.Debug("wakeword_run_wakeword:_heard", "text", text)
-
-		// Check if the text contains the wake word.
-		if containsWakeWord(text, d.wakeWord) {
-			slog.Info("wakeword_run_wakeword:_WAKE_WORD_DETECTED", "text", text)
-
-			remainder := extractAfterWakeWord(text, d.wakeWord)
-
-			ev := Event{Type: "wake_detected"}
-			if remainder != "" {
-				ev.Data = remainder
-			}
-
-			// Mark this detector as done before sending the event so the
-			// state machine doesn't try to cancel it again.
-			d.sm.mu.Lock()
-			d.sm.wakeDetector = nil
-			d.sm.mu.Unlock()
-
-			select {
-			case d.sm.events <- ev:
-			default:
-				slog.Warn("wakeword_run_wakeword:_event_channel_full,_dropping_wake_detected")
-			}
-			return
-		}
-	}
-}
-
-// listenForSpeech captures audio from the recorder when VAD detects speech.
-// It returns the captured samples, or nil if cancelled or no speech was found.
-func (d *wakeWordDetector) listenForSpeech() []float32 {
-	chunks, err := d.sm.recorder.Start()
-	if err != nil {
-		slog.Error("wakeword_listenForSpeech_wakeword:_recorder_start_failed", "error", err)
-		return nil
-	}
-
-	const (
-		speechThreshold = 0.01
-		silenceDuration = 800 * time.Millisecond // shorter silence gap for wake word
-		maxDuration     = 5 * time.Second        // wake word + short command
-	)
-
-	var all []float32
-	speaking := false
-	lastSpeech := time.Now()
-	start := time.Now()
-
-	for {
-		select {
-		case <-d.done:
-			return all
 		case chunk, ok := <-chunks:
 			if !ok {
-				if !speaking {
-					return nil
+				slog.Info("wakeword_run_wakeword:_recorder_channel_closed")
+				return
+			}
+
+			keyword := d.kwsEngine.ProcessSamples(chunk)
+			if keyword != "" {
+				slog.Info("wakeword_run_wakeword:_WAKE_WORD_DETECTED", "keyword", keyword)
+
+				// Mark this detector as done before sending the event so the
+				// state machine doesn't try to cancel it again.
+				d.sm.mu.Lock()
+				d.sm.wakeDetector = nil
+				d.sm.mu.Unlock()
+
+				select {
+				case d.sm.events <- Event{Type: "wake_detected"}:
+				default:
+					slog.Warn("wakeword_run_wakeword:_event_channel_full,_dropping_wake_detected")
 				}
-				return all
-			}
-
-			all = append(all, chunk...)
-
-			rms := rmsOf(chunk)
-			if rms > speechThreshold {
-				if !speaking {
-					slog.Debug("wakeword_listenForSpeech_wakeword:_speech_detected", "rms", rms)
-					speaking = true
-				}
-				lastSpeech = time.Now()
-			}
-
-			if speaking && time.Since(lastSpeech) >= silenceDuration {
-				slog.Debug("wakeword_listenForSpeech_wakeword:_silence_detected", "samples", len(all), "seconds", float64(len(all))/recorderSampleRate)
-				return all
-			}
-
-			if time.Since(start) >= maxDuration {
-				slog.Debug("wakeword_listenForSpeech_wakeword:_max_duration_reached", "seconds", maxDuration.Seconds())
-				return all
+				return
 			}
 		}
 	}
 }
 
 // containsWakeWord checks whether the wake word appears in the ASR text.
+// Kept for reference and testing; the KWS-based detector does not need it.
 func containsWakeWord(text, wakeWord string) bool {
 	return strings.Contains(text, wakeWord)
 }
 
 // extractAfterWakeWord returns the command text after the wake word,
-// trimmed.  A bare name call (no real command) yields "" so the leftover
-// name is never sent to the LLM as a meaningless instruction.
+// trimmed. Kept for reference and testing; the KWS-based detector does not
+// transcribe the utterance, so this path is no longer used at runtime.
+//
+// A bare name call (no real command) yields "" so the leftover name is
+// never sent to the LLM as a meaningless instruction.
 //
 // Rules, in order:
 //  1. Strip leading punctuation/spaces right after the name

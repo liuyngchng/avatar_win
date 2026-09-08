@@ -5,7 +5,10 @@
 // minus the camera face-tracking (not needed for a big-screen avatar).
 package brain
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Mode is the top-level behavior state (FSM).
 type Mode int
@@ -55,11 +58,10 @@ type Emotion string
 const (
 	EmotionNeutral   Emotion = "neutral"
 	EmotionHappy     Emotion = "happy"
-	EmotionCurious   Emotion = "curious"
-	EmotionSurprised Emotion = "surprised"
-	EmotionShy       Emotion = "shy"
-	EmotionSleepy    Emotion = "sleepy"
+	EmotionAngry     Emotion = "angry"
 	EmotionSad       Emotion = "sad"
+	EmotionSurprised Emotion = "surprised"
+	EmotionRelaxed   Emotion = "relaxed"
 )
 
 // State is the current state of the digital human, consumed by the UI.
@@ -70,4 +72,22 @@ type State struct {
 	LastUserText           string  `json:"lastUserText,omitempty"`
 	ResponseText           string  `json:"responseText,omitempty"`
 	IdleAnimationsEnabled  bool    `json:"idleAnimationsEnabled"`
+}
+
+// EmotionFromString converts a string to an Emotion enum.
+func EmotionFromString(s string) Emotion {
+	switch strings.ToLower(s) {
+	case "happy":
+		return EmotionHappy
+	case "angry":
+		return EmotionAngry
+	case "sad":
+		return EmotionSad
+	case "surprised":
+		return EmotionSurprised
+	case "relaxed":
+		return EmotionRelaxed
+	default:
+		return EmotionNeutral
+	}
 }

@@ -32,9 +32,11 @@ type LogConfig struct {
 	Level string `yaml:"level"`
 }
 
-// ASRConfig holds the speech recognition configuration (online API only;
-// the offline build ignores this section and uses local models instead).
+// ASRConfig holds the speech recognition configuration.
+// Mode is "offline" (local sherpa-onnx SenseVoice) or "online" (DashScope API).
+// Default is "online" for backward compatibility.
 type ASRConfig struct {
+	Mode       string `yaml:"mode"` // "offline" or "online" (default: "online")
 	URL        string `yaml:"url"`
 	Model      string `yaml:"model"`
 	Format     string `yaml:"format"`
@@ -49,9 +51,11 @@ type LLMConfig struct {
 	MaxTokens int    `yaml:"max_tokens"`
 }
 
-// TTSConfig holds the text-to-speech configuration (online API only; the
-// offline build ignores this section and uses local models instead).
+// TTSConfig holds the text-to-speech configuration.
+// Mode is "offline" (local sherpa-onnx Matcha-TTS) or "online" (DashScope API).
+// Default is "online" for backward compatibility.
 type TTSConfig struct {
+	Mode       string `yaml:"mode"` // "offline" or "online" (default: "online")
 	URL        string `yaml:"url"`
 	Model      string `yaml:"model"`
 	Voice      string `yaml:"voice"`
