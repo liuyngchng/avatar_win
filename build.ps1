@@ -8,14 +8,15 @@
 #   powershell -ExecutionPolicy Bypass -File build.ps1 sign               # 仅签名已有 exe
 #
 # 版本说明:
-#   - online  默认。纯 Go 编译（CGO_ENABLED=0），使用在线 ASR/TTS API。
-#             无需 gcc / MinGW-w64。
+#   - online  默认。使用在线 ASR/TTS API，KWS 唤醒词使用本地 sherpa-onnx 模型。
+#             需要 MinGW-w64 gcc 编译。
 #   - offline 使用本地 sherpa-onnx 模型（SenseVoiceSmall + Matcha-TTS），
-#             无需网络。需要 MinGW-w64 gcc 编译，并打包 DLL + 模型文件。
+#             无需网络。需要 MinGW-w64 gcc 编译，并额外打包 ASR/TTS 模型文件。
 #
 # 产物:
-#   dist/avatar-desktop-x64.exe     # 独立可执行文件（已签名）
-#   dist/avatar-desktop-x64.zip     # 发布包：exe + cfg.yml + 使用说明.md（离线版额外含 DLL + 模型）
+#   dist/avatar-desktop-x64.exe     # 可执行文件（已签名）
+#   dist/avatar-desktop-x64.zip     # 发布包：exe + cfg.yml + 使用说明.md + sherpa DLL + KWS 模型
+#                                   #（离线版额外含 ASR/TTS 模型）
 #
 # 签名说明:
 #   使用自签名证书（cert/avatar-desktop-x64.pfx），构建时自动生成。
@@ -140,34 +141,35 @@ function Find-SherpaDLLDir {
     return $null
 }
 
-# ── 离线版构建参数 ───────────────────────────────────────────
+# ── 离线/在线版通用构建参数 ───────────────────────────────────
 $GO_TAGS = ""
 $SHERPA_DLL_DIR = ""
 
+# KWS 唤醒词无论在在线还是离线模式都使用本地 sherpa-onnx 模型，
+# 因此 CGO 必须始终开启。CC 需要指向 MinGW-w64 x86_64 gcc。
+$BUILD_CC = Find-MinGWGCC
+if (-not $BUILD_CC) {
+    Write-Host ""
+    Write-Host "ERROR: 编译需要 MinGW-w64 x86_64 gcc（KWS 唤醒词依赖 sherpa-onnx）"
+    Write-Host "  下载地址: https://github.com/nixman/mingw-builds-binaries/releases"
+    Write-Host "  下载 x86_64-*-release-posix-seh-ucrt-*.7z，解压后将 bin 目录加入 PATH"
+    Write-Host "  或者指定 CC 环境变量: `$env:CC = 'D:\path\to\mingw64\bin\x86_64-w64-mingw32-gcc.exe'"
+    exit 1
+}
+$env:CC = $BUILD_CC
+$env:CGO_ENABLED = "1"
+Write-Host "    CGO enabled, CC=$BUILD_CC"
+
 if ($Variant -eq "offline") {
     $GO_TAGS = "-tags offline"
-    $BUILD_CC = Find-MinGWGCC
-    if (-not $BUILD_CC) {
-        Write-Host ""
-        Write-Host "ERROR: 离线版编译需要 MinGW-w64 x86_64 gcc"
-        Write-Host "  下载地址: https://github.com/nixman/mingw-builds-binaries/releases"
-        Write-Host "  下载 x86_64-*-release-posix-seh-ucrt-*.7z，解压后将 bin 目录加入 PATH"
-        Write-Host "  或者指定 CC 环境变量: `$env:CC = 'D:\path\to\mingw64\bin\x86_64-w64-mingw32-gcc.exe'"
-        exit 1
-    }
-    $env:CC = $BUILD_CC
-    $env:CGO_ENABLED = "1"
-    Write-Host "    CGO enabled, CC=$BUILD_CC"
+}
 
-    # 找到 sherpa-onnx 的 DLL 目录（用于打包）
-    $SHERPA_DLL_DIR = Find-SherpaDLLDir
-    if ($SHERPA_DLL_DIR) {
-        Write-Host "    Sherpa DLL dir: $SHERPA_DLL_DIR"
-    } else {
-        Write-Host "    WARNING: sherpa-onnx DLL directory not found — zip will not bundle runtime DLLs"
-    }
+# 找到 sherpa-onnx 的 DLL 目录（用于打包）
+$SHERPA_DLL_DIR = Find-SherpaDLLDir
+if ($SHERPA_DLL_DIR) {
+    Write-Host "    Sherpa DLL dir: $SHERPA_DLL_DIR"
 } else {
-    $env:CGO_ENABLED = "0"
+    Write-Host "    WARNING: sherpa-onnx DLL directory not found — zip will not bundle runtime DLLs"
 }
 
 # ── 版本 / 构建时间 ─────────────────────────────────────────
@@ -459,17 +461,36 @@ try {
         Write-Host ("    Added: $($f.Dst)")
     }
 
-    # 离线版：额外打包 sherpa-onnx 运行时 DLL 和模型文件
-    if ($Variant -eq "offline") {
-        # DLL（onnxruntime.dll 等，运行时必需）
-        if ($SHERPA_DLL_DIR) {
-            Get-ChildItem $SHERPA_DLL_DIR -Filter "*.dll" | ForEach-Object {
-                Copy-Item $_.FullName (Join-Path $tmpPackDir $_.Name)
-                Write-Host ("    Added: " + $_.Name)
-            }
+    # sherpa-onnx 运行时 DLL（KWS 唤醒词依赖，所有模式都需要）
+    # DLL（onnxruntime.dll 等，运行时必需）
+    if ($SHERPA_DLL_DIR) {
+        Get-ChildItem $SHERPA_DLL_DIR -Filter "*.dll" | ForEach-Object {
+            Copy-Item $_.FullName (Join-Path $tmpPackDir $_.Name)
+            Write-Host ("    Added: " + $_.Name)
         }
+    } else {
+        Write-Host "    WARNING: sherpa-onnx DLL not found — exe will fail to start without them"
+    }
 
-        # 模型文件
+    # KWS 唤醒词模型（所有模式都需要）
+    $kwsDir = "models/kws"
+    if (Test-Path $kwsDir) {
+        $dstKwsDir = Join-Path $tmpPackDir $kwsDir
+        New-Item -ItemType Directory -Force -Path $dstKwsDir | Out-Null
+        # 只打包 int8 量化模型 + 必需文本文件，跳过 fp32 模型与 test_wavs 子目录。
+        # findFile 按字典序扫描，int8 版（*.int8.onnx）会优先命中，fp32 版无需分发。
+        Get-ChildItem $kwsDir -File | Where-Object {
+            $_.Extension -ne ".onnx" -or $_.Name -like "*.int8.onnx"
+        } | ForEach-Object {
+            Copy-Item $_.FullName $dstKwsDir
+        }
+        Write-Host ("    Added: $kwsDir/ (KWS model, int8 only)")
+    } else {
+        Write-Host "    WARNING: $kwsDir not found — wake word detection will fail"
+    }
+
+    # 离线版：额外打包 ASR/TTS 模型文件
+    if ($Variant -eq "offline") {
         foreach ($modelDir in @("models/asr", "models/tts")) {
             if (Test-Path $modelDir) {
                 $dstModelDir = Join-Path $tmpPackDir $modelDir
@@ -526,4 +547,5 @@ if ($Variant -eq "offline") {
     Write-Host "  To distribute, send the user:"
     Write-Host "    1. $ZIP_NAME — extract and double-click $EXE_NAME"
     Write-Host "    2. Edit cfg.yml and fill in WorkspaceId + API key"
+    Write-Host "    3. 唤醒词已内置于 KWS 本地模型，无需额外配置"
 }
