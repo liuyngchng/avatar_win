@@ -1,0 +1,35 @@
+# Git
+.git
+
+# Docker build cache directories (build/deps/ is needed by Dockerfile for Go tarball)
+build/gocache/
+build/gomodcache/
+
+# Build outputs
+dist/
+*.exe
+
+# Config with secrets (keep cfg.yml.template)
+cfg.yml
+
+# Model files (large binaries, mounted at runtime)
+models/*
+
+# IDE / tools
+.vscode/
+.idea/
+.claude/
+
+# Self-signed certificate (not needed in Docker)
+cert/
+
+# Build artifacts & temp files
+rsrc
+web/index.html.orig
+
+# Runtime logs
+avatar.log
+
+# OS garbage
+.DS_Store
+Thumbs.db

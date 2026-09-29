@@ -9,6 +9,7 @@ cfg.yml
 
 # Build artifacts
 dist/
+build/
 
 # Offline model files (large binaries, distributed separately via zip).
 # Everything under models/ is ignored except the README.
